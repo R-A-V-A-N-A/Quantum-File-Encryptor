@@ -13,8 +13,11 @@ A powerful file encryption tool using **Infinite-Layer Quantum-Resistant Encrypt
 
 ## Quick Start
 
+**Windows:** Double-click `Launch_Encryptor.bat`
+
+**Or run manually:**
 ```bash
-python file_encryptor.py
+python encryptor_app.py
 ```
 
 ## Security
