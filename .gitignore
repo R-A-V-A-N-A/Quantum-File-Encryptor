@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+Lib/
+Scripts/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Compiled
+*.c
+*.html
+*.pyd
+*.exe
+*.spec
+
+# Dependencies (too large for GitHub)
+cffi/
+pycparser/
+cryptography/
+cryptography-46.0.3.dist-info/
+argon2/
+_argon2_cffi_bindings/
+
+# Keys (NEVER commit private keys!)
+keys/
+*.pem
+*.key
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.tmp
+*.temp
