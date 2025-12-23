@@ -20,7 +20,7 @@ SECURITY FEATURES:
 # ============================================================================
 # VERSION AND UPDATE CONFIGURATION
 # ============================================================================
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.2.1"
 GITHUB_REPO = "R-A-V-A-N-A/Quantum-File-Encryptor"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
@@ -2786,11 +2786,11 @@ def menu_update():
             # Create batch script to replace EXE after this process exits
             batch_path = Path(current_exe).parent / "update.bat"
             batch_content = f'''@echo off
-timeout /t 2 /nobreak > nul
+timeout /t 3 /nobreak > nul
 del "{current_exe}"
 move "{download_path}" "{current_exe}"
-del "%~f0"
 start "" "{current_exe}"
+del "%~f0"
 '''
             with open(batch_path, 'w') as f:
                 f.write(batch_content)
@@ -2798,13 +2798,16 @@ start "" "{current_exe}"
             print()
             print(c("  ✅ UPDATE READY!", Colors.SUCCESS))
             print()
+            
+            print()
             print(c("  The application will now restart to complete the update.", Colors.BRIGHT_WHITE))
             print()
             input("  Press Enter to restart...")
             
             # Run the batch script and exit
+            # Use CREATE_NEW_CONSOLE to ensure the batch script lives on and can spawn the new window
             subprocess.Popen(['cmd', '/c', str(batch_path)], 
-                           creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+                           creationflags=subprocess.CREATE_NEW_CONSOLE)
             sys.exit(0)
         else:
             print(c("  ✅ UPDATE DOWNLOADED!", Colors.SUCCESS))
