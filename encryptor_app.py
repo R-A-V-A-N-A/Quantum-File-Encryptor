@@ -20,7 +20,7 @@ SECURITY FEATURES:
 # ============================================================================
 # VERSION AND UPDATE CONFIGURATION
 # ============================================================================
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 GITHUB_REPO = "R-A-V-A-N-A/Quantum-File-Encryptor"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
@@ -1762,10 +1762,7 @@ def menu_encrypt():
         # ... logic continues to key generation ...
         pass
         
-    else:
-        # Single file selection logic...
 
-        
     else:
         # Single file selection (original behavior)
         print_step(2, "Select file to encrypt...")
