@@ -48,6 +48,8 @@ import time
 import threading
 from pathlib import Path
 from datetime import datetime, timedelta
+import shutil
+import tarfile
 
 # ============================================================================
 # ANSI COLORS AND FORMATTING (Premium CLI Experience)
@@ -882,9 +884,36 @@ def unzip_folder(zip_path: Path, output_dir: Path = None, progress_callback=None
                 pct = int(((i + 1) / total) * 100) if total > 0 else 100
                 progress_callback(pct, i + 1, total, 0, f"Extracting: {Path(member).name}")
     
+
     # Return the root folder that was extracted
     root_folder = output_dir / Path(members[0]).parts[0] if members else output_dir
     return root_folder
+
+
+def untar_folder(tar_path: Path, output_dir: Path = None, progress_callback=None) -> Path:
+    """
+    Extract a tar.gz file back to a folder.
+    Returns the path to the extracted folder.
+    """
+    tar_path = Path(tar_path)
+    
+    if output_dir is None:
+        output_dir = tar_path.parent
+    
+    with tarfile.open(tar_path, 'r:gz') as tar:
+        members = tar.getmembers()
+        total = len(members)
+        
+        for i, member in enumerate(members):
+            tar.extract(member, output_dir)
+            
+            if progress_callback:
+                pct = int(((i + 1) / total) * 100) if total > 0 else 100
+                progress_callback(pct, i + 1, total, 0, f"Extracting: {Path(member.name).name}")
+    
+    # Return the root folder that was extracted if possible
+    return output_dir / Path(members[0].name).parts[0] if members else output_dir
+
 
 
 # ============================================================================
@@ -1423,6 +1452,191 @@ def show_header():
     print()
 
 
+
+# ════════════════════════════════════════════════════════════════════════════════
+# STREAMING ENCRYPTION UTILITIES
+# ════════════════════════════════════════════════════════════════════════════════
+
+class EncryptedFileWriter:
+    """
+    A file-like object that encrypts written data and streams it to disk.
+    Allows passing this object to tarfile.open(fileobj=...) to gzip+encrypt on the fly.
+    """
+    def __init__(self, output_file, cipher, salt, chunk_size, progress_callback=None, total_size_estimate=None):
+        self.output_file = output_file
+        self.cipher = cipher
+        self.salt = salt
+        self.chunk_size = chunk_size
+        self.buffer = bytearray()
+        self.chunk_index = 0
+        self.bytes_written = 0
+        self.progress_callback = progress_callback
+        self.total_size_estimate = total_size_estimate
+        self.start_time = time.time()
+        
+    def write(self, data):
+        self.buffer.extend(data)
+        
+        while len(self.buffer) >= self.chunk_size:
+            chunk = self.buffer[:self.chunk_size]
+            self._encrypt_and_write_chunk(chunk)
+            self.buffer = self.buffer[self.chunk_size:]
+            
+        return len(data)
+    
+    def _encrypt_and_write_chunk(self, chunk_data):
+        nonce = get_nonce_for_chunk(self.salt, self.chunk_index)
+        encrypted_chunk = self.cipher.encrypt(nonce, chunk_data, None)
+        
+        # Write: chunk_length + encrypted_data
+        self.output_file.write(struct.pack('>Q', len(encrypted_chunk)))
+        self.output_file.write(encrypted_chunk)
+        
+        self.chunk_index += 1
+        self.bytes_written += len(chunk_data)
+        
+        if self.progress_callback and self.total_size_estimate:
+            elapsed = time.time() - self.start_time
+            if elapsed > 0:
+                speed = self.bytes_written / elapsed
+                remaining = max(0, self.total_size_estimate - self.bytes_written)
+                eta = remaining / speed if speed > 0 else 0
+                pct = min(99.9, (self.bytes_written / self.total_size_estimate) * 100)
+                
+                self.progress_callback(pct, self.bytes_written, self.total_size_estimate, eta,
+                                     f"Encrypting stream... {pct:.1f}% | {format_speed(speed)}")
+    
+    def close(self):
+        if self.buffer:
+            self._encrypt_and_write_chunk(self.buffer)
+            self.buffer = bytearray()
+    
+    def tell(self):
+        return self.bytes_written
+
+def encrypt_folder_stream(folder_path: Path, key_bytes: bytes, output_path: Path = None, 
+                         delete_source: bool = False) -> tuple:
+    """
+    Encrypts a folder by streaming it into a tar.gz archive and encrypting on the fly.
+    NO intermediate temporary zip file created.
+    """
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+        from argon2.low_level import hash_secret_raw, Type
+    except ImportError:
+        return False, "Required libraries missing."
+
+    folder_path = Path(folder_path)
+    
+    # Calculate total size for progress bar
+    print("  Computing total size...")
+    all_files = list(folder_path.rglob("*"))
+    files_only = [f for f in all_files if f.is_file()]
+    total_size = sum(f.stat().st_size for f in files_only)
+    
+    chunk_size = get_optimal_chunk_size()
+    salt = secrets.token_bytes(16)
+    
+    # Derive key
+    derived_key = hash_secret_raw(
+        secret=key_bytes,
+        salt=salt,
+        time_cost=3,
+        memory_cost=65536,
+        parallelism=4,
+        hash_len=32,
+        type=Type.ID
+    )
+    
+    cipher = ChaCha20Poly1305(derived_key)
+    
+    # Metadata
+    metadata = {
+        'name': folder_path.name + ".tar.gz",
+        'size': total_size, # Approx (uncompressed)
+        'time': datetime.now().isoformat(),
+        'algorithm': 'ChaCha20-Poly1305-Stream',
+        'chunk_size': chunk_size,
+        'is_folder': True,
+        'content_type': 'tar.gz'
+    }
+    meta_bytes = json.dumps(metadata).encode()
+
+    if output_path is None:
+        output_path = folder_path.with_suffix(folder_path.suffix + '.qenc') # Keep .qenc extension
+    
+    pbar = ProgressBar(total_size, desc="Streaming Encryption")
+    
+    def stream_progress(pct, done, total, eta, msg):
+        pbar.update(done, status=msg)
+    
+    try:
+        with open(output_path, 'wb') as outfile:
+            # 1. Write Header
+            outfile.write(STREAM_MAGIC)
+            outfile.write(struct.pack('>H', VERSION))
+            
+            # Placeholders
+            pos_original_size = outfile.tell()
+            outfile.write(struct.pack('>Q', 0))  # Placeholder: original_size
+            
+            outfile.write(struct.pack('>Q', chunk_size))
+            
+            pos_total_chunks = outfile.tell()
+            outfile.write(struct.pack('>Q', 0))  # Placeholder: total_chunks
+            
+            outfile.write(struct.pack('>I', len(meta_bytes)))
+            outfile.write(meta_bytes)
+            outfile.write(salt)
+            
+            # 2. Setup Streaming Writer
+            enc_writer = EncryptedFileWriter(
+                outfile, cipher, salt, chunk_size, 
+                progress_callback=stream_progress,
+                total_size_estimate=total_size
+            )
+            
+            # 3. Create Tarball into Encrypted Stream
+            with tarfile.open(fileobj=enc_writer, mode='w|gz', compresslevel=6) as tar:
+                for file_path in files_only:
+                    archive_name = file_path.relative_to(folder_path.parent)
+                    tar.add(file_path, arcname=archive_name)
+                    
+                    if delete_source:
+                        try:
+                            file_path.unlink() # Delete file immediately (Space Saver)
+                        except:
+                            pass
+                            
+            enc_writer.close()
+            
+            # 4. Finalize Header
+            final_chunks = enc_writer.chunk_index
+            total_bytes_written = enc_writer.bytes_written
+            
+            outfile.seek(pos_original_size)
+            outfile.write(struct.pack('>Q', total_bytes_written))
+            
+            outfile.seek(pos_total_chunks)
+            outfile.write(struct.pack('>Q', final_chunks))
+            
+        pbar.finish("Encryption Complete!")
+        
+        if delete_source:
+             try:
+                 shutil.rmtree(folder_path)
+             except:
+                 pass
+                 
+        return True, str(output_path)
+        
+    except Exception as e:
+        if output_path.exists():
+            try: output_path.unlink()
+            except: pass
+        return False, str(e)
+
+
 # ════════════════════════════════════════════════════════════════════════════════
 # MENU FUNCTIONS
 # ════════════════════════════════════════════════════════════════════════════════
@@ -1488,62 +1702,69 @@ def menu_encrypt():
         print(f"  Total Size: {c(format_size(total_size), Colors.BRIGHT_WHITE)}")
         print()
         
-        # Check disk space BEFORE compression
-        # Need: compressed ZIP (~same as original) + encrypted file (~same as original)
-        # So we need at least 2x the folder size
-        try:
-            import psutil
-            disk_usage = psutil.disk_usage(str(folder_path.parent))
-            free_space = disk_usage.free
-            required_space = total_size * 2  # ZIP + encrypted file
-            
-            print(f"  Free Space: {c(format_size(free_space), Colors.BRIGHT_WHITE)}")
-            print(f"  Required: {c(format_size(required_space), Colors.BRIGHT_WHITE)} (approx)")
+        # Choose Encryption Mode
+        print_step(3, "Choose Encryption Mode")
+        print(c("  " + "─" * 40, Colors.MUTED))
+        print(f"  {c('[1]', Colors.BRIGHT_CYAN)} Standard Mode (Recommended)")
+        print(f"      - Creates encrypted file safely.")
+        print(f"      - Requires disk space: ~{format_size(total_size)} extra.")
+        print()
+        print(f"  {c('[2]', Colors.BRIGHT_CYAN)} Space Saver Mode (Zero Disk Space)")
+        print(f"      - Deletes original files AS they are encrypted.")
+        print(f"      - Perfect for low disk space.")
+        print(f"      - {c('WARNING: Data loss if interrupted!', Colors.RED)}")
+        print()
+        
+        mode_choice = input(c("  Choose [1/2]: ", Colors.BRIGHT_WHITE)).strip()
+        
+        delete_source = False
+        if mode_choice == '2':
             print()
-            
-            if free_space < required_space:
-                print_error(f"Not enough disk space!")
-                print(f"  You need at least {c(format_size(required_space), Colors.BRIGHT_WHITE)} free.")
-                print(f"  You only have {c(format_size(free_space), Colors.BRIGHT_WHITE)} available.")
+            print_warning("⚠️  WARNING: SPACE SAVER MODE SELECTED")
+            print(c("  Files will be deleted immediately after encryption.", Colors.RED))
+            print("  If the process crashes or you press Ctrl+C, files processed")
+            print("  so far will be GONE and the archive might be incomplete.")
+            print()
+            confirm = input(c("  Type 'CONFIRM' to proceed: ", Colors.RED))
+            if confirm == 'CONFIRM':
+                delete_source = True
+            else:
+                print_warning("Confirmation failed. Switching to Standard Mode.")
+        
+        print()
+        
+        # Check disk space (only for Standard Mode)
+        if not delete_source:
+            try:
+                import psutil
+                disk_usage = psutil.disk_usage(str(folder_path.parent))
+                free_space = disk_usage.free
+                required_space = total_size + (50 * 1024 * 1024) # Size + 50MB overhead
+                
+                print(f"  Free Space: {c(format_size(free_space), Colors.BRIGHT_WHITE)}")
+                print(f"  Required: {c(format_size(required_space), Colors.BRIGHT_WHITE)}")
                 print()
-                print_warning("TIP: Encrypt individual files instead of folders to save space,")
-                print_warning("     or free up disk space before continuing.")
-                input("\n  Press Enter to continue...")
-                return
-        except ImportError:
-            pass  # psutil not available, continue without check
+                
+                if free_space < required_space:
+                    print_error(f"Not enough disk space!")
+                    print(f"  You need at least {c(format_size(required_space), Colors.BRIGHT_WHITE)} free.")
+                    print()
+                    print_warning("TIP: Use 'Space Saver Mode' [2] to encrypt without extra space.")
+                    input("\n  Press Enter to continue...")
+                    return
+            except ImportError:
+                pass
+
+        # Call streaming encryption directly
+        # Skip the rest of this function's file selection logic and jump to key generation
+        file_path = folder_path # Used for key gen/dest name
         
-        # Compress folder to ZIP
-        print_step(3, "Compressing folder...")
+        # ... logic continues to key generation ...
+        pass
         
-        temp_zip = folder_path.parent / f"{folder_path.name}.zip"
-        
-        # Progress for compression
-        pbar = ProgressBar(file_count, desc="Compressing")
-        
-        def compress_progress(pct, processed, total, eta, msg):
-            pbar.update(processed, status=msg)
-        
-        try:
-            zip_path = zip_folder(folder_path, temp_zip, compress_progress)
-            pbar.finish("Compression Complete!")
-        except Exception as e:
-            print()
-            print_error(f"Could not compress folder: {e}")
-            # Clean up partial zip if it exists
-            if temp_zip.exists():
-                try:
-                    temp_zip.unlink()
-                except:
-                    pass
-            input("\n  Press Enter to continue...")
-            return
-        print()
-        
-        file_path = zip_path
-        file_size = file_path.stat().st_size
-        print(f"  Compressed: {c(format_size(file_size), Colors.BRIGHT_WHITE)}")
-        print()
+    else:
+        # Single file selection logic...
+
         
     else:
         # Single file selection (original behavior)
@@ -1731,19 +1952,31 @@ def menu_encrypt():
     print_step(step_num, "Encrypting...")
     print()
     
-    # Progress bar callback
-    pbar = ProgressBar(file_size, desc="Encrypting")
     
-    def progress_callback(pct, bytes_done, total_bytes, eta, message):
-        pbar.update(bytes_done, status=message)
     
-    success, result = encrypt_file_with_key(
-        file_path, key_bytes, output_path, progress_callback,
-        security_question=security_question,
-        security_answer=security_answer,
-        extra_metadata={'is_split': bool(key_shares), 'is_folder': is_folder}
-    )
-    pbar.finish("Encryption Complete!")
+    
+    if is_folder:
+        # Streaming Folder Encryption
+        # Note: encrypt_folder_stream handles its own progress bar
+        success, result = encrypt_folder_stream(
+            file_path, key_bytes, output_path, 
+            delete_source=locals().get('delete_source', False)
+        )
+    else:
+        # Standard Single File Encryption
+        pbar = ProgressBar(file_size, desc="Encrypting")
+        
+        def progress_callback(pct, bytes_done, total_bytes, eta, message):
+            pbar.update(bytes_done, status=message)
+        
+        success, result = encrypt_file_with_key(
+            file_path, key_bytes, output_path, progress_callback,
+            security_question=security_question,
+            security_answer=security_answer,
+            extra_metadata={'is_split': bool(key_shares), 'is_folder': False}
+        )
+        pbar.finish("Encryption Complete!")
+
     print()
     
     # Clean up temporary ZIP file (if folder was encrypted)
@@ -2123,7 +2356,7 @@ def menu_decrypt():
         decrypted_path = Path(result)
         final_result = result
         
-        if metadata and metadata.get('is_folder') and decrypted_path.suffix == '.zip':
+        if metadata and metadata.get('is_folder'):
             print_info("Encrypted folder detected. Extracting...")
             
             pbar_extract = ProgressBar(100, desc="Extracting")
@@ -2132,12 +2365,25 @@ def menu_decrypt():
                 pbar_extract.update(pct, status=msg)
             
             try:
-                extracted_folder = unzip_folder(decrypted_path, decrypted_path.parent, extract_progress)
+                # Check format: new streaming (tar.gz) or legacy (zip)
+                is_zip = decrypted_path.suffix == '.zip'
+                
+                if is_zip:
+                    extracted_folder = unzip_folder(decrypted_path, decrypted_path.parent, extract_progress)
+                else:
+                    # Assume tar.gz (even if extension is just .qenc or something else, 
+                    # create a temp name if needed usually tarfile handles it)
+                    extracted_folder = untar_folder(decrypted_path, decrypted_path.parent, extract_progress)
+                
                 pbar_extract.finish("Extraction Complete!")
                 print()
                 
-                # Delete the temporary zip file
-                decrypted_path.unlink()
+                # Delete the temporary archive file
+                try:
+                    decrypted_path.unlink()
+                except:
+                    pass
+                    
                 final_result = str(extracted_folder)
                 
                 print_box("FOLDER DECRYPTION SUCCESSFUL!", [
@@ -2147,7 +2393,7 @@ def menu_decrypt():
             except Exception as e:
                 pbar_extract.finish("Extraction failed!")
                 print_warning(f"Could not extract folder: {e}")
-                print_info(f"The ZIP file is saved at: {decrypted_path}")
+                print_info(f"The archive file is saved at: {decrypted_path}")
                 
                 print_box("DECRYPTION SUCCESSFUL!", [
                     f"File: {decrypted_path.name}",
