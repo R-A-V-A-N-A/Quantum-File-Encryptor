@@ -1488,6 +1488,31 @@ def menu_encrypt():
         print(f"  Total Size: {c(format_size(total_size), Colors.BRIGHT_WHITE)}")
         print()
         
+        # Check disk space BEFORE compression
+        # Need: compressed ZIP (~same as original) + encrypted file (~same as original)
+        # So we need at least 2x the folder size
+        try:
+            import psutil
+            disk_usage = psutil.disk_usage(str(folder_path.parent))
+            free_space = disk_usage.free
+            required_space = total_size * 2  # ZIP + encrypted file
+            
+            print(f"  Free Space: {c(format_size(free_space), Colors.BRIGHT_WHITE)}")
+            print(f"  Required: {c(format_size(required_space), Colors.BRIGHT_WHITE)} (approx)")
+            print()
+            
+            if free_space < required_space:
+                print_error(f"Not enough disk space!")
+                print(f"  You need at least {c(format_size(required_space), Colors.BRIGHT_WHITE)} free.")
+                print(f"  You only have {c(format_size(free_space), Colors.BRIGHT_WHITE)} available.")
+                print()
+                print_warning("TIP: Encrypt individual files instead of folders to save space,")
+                print_warning("     or free up disk space before continuing.")
+                input("\n  Press Enter to continue...")
+                return
+        except ImportError:
+            pass  # psutil not available, continue without check
+        
         # Compress folder to ZIP
         print_step(3, "Compressing folder...")
         
