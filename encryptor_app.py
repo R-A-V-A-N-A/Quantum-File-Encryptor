@@ -249,18 +249,18 @@ STREAM_MAGIC = b"SVLS"
 # ============================================================================
 
 def get_optimal_chunk_size():
-    """Calculate optimal chunk size based on 70% of available RAM"""
+    """Calculate optimal chunk size based on 90% of available RAM"""
     try:
         import psutil
-        total_mem = psutil.virtual_memory().total
-        # Use 70% of total memory, but cap between 64MB and 1GB
-        # (ChaCha20-Poly1305 has a 2GB limit, so we stay well under)
-        chunk_size = int(total_mem * 0.70)
-        chunk_size = max(64 * 1024 * 1024, min(chunk_size, 1 * 1024 * 1024 * 1024))  # Max 1GB
+        available_mem = psutil.virtual_memory().available
+        # Use 90% of AVAILABLE memory for maximum speed (not total)
+        # Cap between 256MB and 2GB for optimal performance
+        chunk_size = int(available_mem * 0.90)
+        chunk_size = max(256 * 1024 * 1024, min(chunk_size, 2 * 1024 * 1024 * 1024))  # 256MB - 2GB
         return chunk_size
     except ImportError:
-        # Fallback: use 512MB chunks if psutil not available
-        return 512 * 1024 * 1024
+        # Fallback: use 1GB chunks if psutil not available
+        return 1024 * 1024 * 1024
 
 def get_nonce_for_chunk(salt: bytes, chunk_index: int) -> bytes:
     """Generate unique 12-byte nonce for each chunk"""
@@ -919,7 +919,7 @@ def encrypt_file_with_key(file_path: Path, key_bytes: bytes, output_path: Path =
     """
     Encrypt file of ANY size using streaming ChaCha20-Poly1305.
     
-    Uses 70% of available RAM for maximum speed.
+    Uses 90% of available RAM for maximum speed.
     Shows progress with ETA.
     Optionally includes security question for key recovery.
     """
@@ -1010,55 +1010,77 @@ def encrypt_file_with_key(file_path: Path, key_bytes: bytes, output_path: Path =
     start_time = time.time()
     bytes_processed = 0
     
-    with open(file_path, 'rb') as infile, open(output_path, 'wb') as outfile:
-        # Write header
-        outfile.write(STREAM_MAGIC)                           # 4 bytes
-        outfile.write(struct.pack('>H', VERSION))             # 2 bytes
-        outfile.write(struct.pack('>Q', file_size))           # 8 bytes - original size
-        outfile.write(struct.pack('>Q', chunk_size))          # 8 bytes - chunk size
-        outfile.write(struct.pack('>Q', total_chunks))        # 8 bytes - total chunks
-        outfile.write(struct.pack('>I', len(meta_bytes)))     # 4 bytes - meta length (increased for recovery data)
-        outfile.write(meta_bytes)                             # variable - metadata
-        outfile.write(salt)                                   # 16 bytes - salt
+    try:
+        with open(file_path, 'rb') as infile, open(output_path, 'wb') as outfile:
+            # Write header
+            outfile.write(STREAM_MAGIC)                           # 4 bytes
+            outfile.write(struct.pack('>H', VERSION))             # 2 bytes
+            outfile.write(struct.pack('>Q', file_size))           # 8 bytes - original size
+            outfile.write(struct.pack('>Q', chunk_size))          # 8 bytes - chunk size
+            outfile.write(struct.pack('>Q', total_chunks))        # 8 bytes - total chunks
+            outfile.write(struct.pack('>I', len(meta_bytes)))     # 4 bytes - meta length (increased for recovery data)
+            outfile.write(meta_bytes)                             # variable - metadata
+            outfile.write(salt)                                   # 16 bytes - salt
+            
+            # Encrypt each chunk
+            for chunk_idx in range(total_chunks):
+                # Read chunk
+                chunk_data = infile.read(chunk_size)
+                if not chunk_data:
+                    break
+                
+                # Generate unique nonce for this chunk
+                nonce = get_nonce_for_chunk(salt, chunk_idx)
+                
+                # Encrypt chunk
+                encrypted_chunk = cipher.encrypt(nonce, chunk_data, None)
+                
+                # Write: chunk_length + encrypted_data
+                outfile.write(struct.pack('>Q', len(encrypted_chunk)))
+                outfile.write(encrypted_chunk)
+                
+                bytes_processed += len(chunk_data)
+                
+                # Progress update
+                if progress_callback:
+                    elapsed = time.time() - start_time
+                    if elapsed > 0 and bytes_processed > 0:
+                        speed = bytes_processed / elapsed
+                        remaining_bytes = file_size - bytes_processed
+                        eta = remaining_bytes / speed if speed > 0 else 0
+                        pct = (bytes_processed / file_size) * 100
+                        progress_callback(
+                            pct, bytes_processed, file_size, eta,
+                            f"Encrypting... {pct:.1f}% | {format_speed(speed)} | ETA: {format_time(eta)}"
+                        )
         
-        # Encrypt each chunk
-        for chunk_idx in range(total_chunks):
-            # Read chunk
-            chunk_data = infile.read(chunk_size)
-            if not chunk_data:
-                break
-            
-            # Generate unique nonce for this chunk
-            nonce = get_nonce_for_chunk(salt, chunk_idx)
-            
-            # Encrypt chunk
-            encrypted_chunk = cipher.encrypt(nonce, chunk_data, None)
-            
-            # Write: chunk_length + encrypted_data
-            outfile.write(struct.pack('>Q', len(encrypted_chunk)))
-            outfile.write(encrypted_chunk)
-            
-            bytes_processed += len(chunk_data)
-            
-            # Progress update
-            if progress_callback:
-                elapsed = time.time() - start_time
-                if elapsed > 0 and bytes_processed > 0:
-                    speed = bytes_processed / elapsed
-                    remaining_bytes = file_size - bytes_processed
-                    eta = remaining_bytes / speed if speed > 0 else 0
-                    pct = (bytes_processed / file_size) * 100
-                    progress_callback(
-                        pct, bytes_processed, file_size, eta,
-                        f"Encrypting... {pct:.1f}% | {format_speed(speed)} | ETA: {format_time(eta)}"
-                    )
-    
-    elapsed = time.time() - start_time
-    if progress_callback:
-        progress_callback(100, file_size, file_size, 0, 
-                         f"Done! {format_size(file_size)} in {format_time(elapsed)}")
-    
-    return True, str(output_path)
+        elapsed = time.time() - start_time
+        if progress_callback:
+            progress_callback(100, file_size, file_size, 0, 
+                             f"Done! {format_size(file_size)} in {format_time(elapsed)}")
+        
+        return True, str(output_path)
+        
+    except MemoryError:
+        # Clean up partial file if memory error
+        if output_path and Path(output_path).exists():
+            try:
+                Path(output_path).unlink()
+            except:
+                pass
+        return False, "Out of memory! Try closing other applications or encrypting a smaller file."
+    except PermissionError as e:
+        return False, f"Permission denied: {e}. Make sure the file is not open in another program."
+    except IOError as e:
+        return False, f"I/O error: {e}"
+    except Exception as e:
+        # Clean up partial file on any error
+        if output_path and Path(output_path).exists():
+            try:
+                Path(output_path).unlink()
+            except:
+                pass
+        return False, f"Encryption failed: {str(e)}"
 
 
 def recover_key_from_answer(file_path: Path, security_answer: str) -> tuple:
