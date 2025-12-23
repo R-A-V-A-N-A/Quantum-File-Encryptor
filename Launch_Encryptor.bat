@@ -15,18 +15,14 @@ echo   Quantum File Encryptor
 echo ========================================
 echo.
 
-REM Try different Python versions
-where py >nul 2>&1
-if %errorlevel%==0 (
-    py -3 encryptor_app.py
-) else (
-    python encryptor_app.py
-)
+REM IMPORTANT: Use py -3.14 (NOT -3.14t which is freethreaded and causes GIL errors)
+py -3.14 encryptor_app.py
 
 if errorlevel 1 (
     echo.
     echo [ERROR] Python not found or script failed.
-    echo Make sure Python 3.x is installed.
+    echo If you see a GIL error, you may need to install Python 3.12 LTS.
+    echo Your Python 3.14t (freethreaded) has compatibility issues.
 )
 
 popd

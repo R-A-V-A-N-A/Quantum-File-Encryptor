@@ -2,148 +2,178 @@
 🔐 QUANTUM FILE ENCRYPTOR - Command Line Interface
 
 Usage:
-    python cli.py keygen [--layers N]     Generate encryption keys
-    python cli.py encrypt <file>          Encrypt a file
-    python cli.py decrypt <file.qenc>     Decrypt a file
-    python cli.py info                    Show key information
+    python cli.py encrypt <file> [--password <password>]  Encrypt a file
+    python cli.py decrypt <file.qenc> --password <password>  Decrypt a file
+    python cli.py genkey                                   Generate a random password
+    python cli.py info                                     Show security information
 """
 
 import sys
 import os
 import json
 import base64
+import secrets
 import argparse
 from pathlib import Path
 from datetime import datetime
 
-# Add parent directory to import the encryption module
-sys.path.insert(0, str(Path(__file__).parent.parent / "QUANTUM_RESISTANT_ENCRYPTION"))
+# Add local folder and parent directory to import the encryption modules
+sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(1, str(Path(__file__).parent.parent / "QUANTUM_RESISTANT_ENCRYPTION"))
 
+# Try to import QuantumSecureVault (post-quantum)
 try:
-    from quantum_encryption_infinite import InfiniteQuantumEncryption
+    from secure_vault_quantum import QuantumSecureVault, SecureVault
+    ENCRYPTION_LEVEL = "QUANTUM"
+    QUANTUM_AVAILABLE = True
 except ImportError:
-    print("❌ Error: quantum_encryption_infinite.py not found!")
-    print("   Make sure QUANTUM_RESISTANT_ENCRYPTION folder exists.")
-    sys.exit(1)
+    try:
+        from secure_vault import SecureVault
+        ENCRYPTION_LEVEL = "STANDARD"
+        QUANTUM_AVAILABLE = False
+    except ImportError:
+        print("❌ Error: No encryption module found!")
+        print("   Make sure secure_vault_quantum.py or secure_vault.py exists.")
+        sys.exit(1)
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════
 # CONSTANTS
 # ════════════════════════════════════════════════════════════════════════════════════════
 
-KEYS_DIR = Path(__file__).parent / "keys"
-MAGIC_HEADER = b"QENC"
-VERSION = 1
+MAGIC_HEADER = b"QVLT"  # Quantum VauLT
+VERSION = 2
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════
-# KEY MANAGEMENT
+# FILE ENCRYPTOR
 # ════════════════════════════════════════════════════════════════════════════════════════
 
-def generate_keys(layers: int = 10):
-    """Generate new encryption keys"""
-    KEYS_DIR.mkdir(parents=True, exist_ok=True)
+class FileEncryptor:
+    """Handles file encryption/decryption"""
     
-    print(f"🔑 Generating {layers}-layer encryption keys...")
-    print(f"   Security: {layers * 1024:,} bits")
-    print()
+    def __init__(self):
+        if QUANTUM_AVAILABLE:
+            self.vault = QuantumSecureVault()
+        else:
+            self.vault = SecureVault()
     
-    crypto = InfiniteQuantumEncryption(num_layers=layers)
-    public_key, private_key = crypto.generate_keypair()
+    def generate_password(self) -> str:
+        """Generate a secure random password"""
+        return base64.b64encode(secrets.token_bytes(32)).decode('ascii')
     
-    # Save public key
-    public_data = {
-        'encryption_pk': base64.b64encode(public_key['encryption_pk']).decode(),
-        'signing_pk': base64.b64encode(public_key['signing_pk']).decode(),
-        'num_layers': public_key['num_layers'],
-        'version': public_key['version'],
-        'created': datetime.now().isoformat(),
-    }
-    
-    with open(KEYS_DIR / "public_key.json", 'w') as f:
-        json.dump(public_data, f, indent=2)
-    
-    # Save private key
-    private_data = {
-        'encryption_sk': base64.b64encode(private_key['encryption_sk']).decode(),
-        'signing_sk': base64.b64encode(private_key['signing_sk']).decode(),
-        'num_layers': private_key['num_layers'],
-        'version': private_key['version'],
-        'created': datetime.now().isoformat(),
-    }
-    
-    with open(KEYS_DIR / "private_key.json", 'w') as f:
-        json.dump(private_data, f, indent=2)
-    
-    print("✅ Keys generated successfully!")
-    print(f"   📂 Saved to: {KEYS_DIR}")
-    print()
-    print("⚠️  IMPORTANT: Keep your private_key.json secure!")
-    print("   Anyone with this file can decrypt your files.")
-
-
-def load_public_key():
-    """Load public key"""
-    try:
-        with open(KEYS_DIR / "public_key.json", 'r') as f:
-            data = json.load(f)
-        return {
-            'encryption_pk': base64.b64decode(data['encryption_pk']),
-            'signing_pk': base64.b64decode(data['signing_pk']),
-            'num_layers': data['num_layers'],
-            'version': data['version'],
+    def encrypt_file(self, input_path: Path, password: str, output_path: Path = None) -> tuple:
+        """Encrypt a file with password"""
+        if output_path is None:
+            output_path = input_path.with_suffix(input_path.suffix + ".qenc")
+        
+        with open(input_path, 'rb') as f:
+            plaintext = f.read()
+        
+        # Create metadata
+        metadata = {
+            'original_name': input_path.name,
+            'original_size': len(plaintext),
+            'encrypted_at': datetime.now().isoformat(),
+            'encryption_level': ENCRYPTION_LEVEL,
         }
-    except FileNotFoundError:
-        return None
+        metadata_bytes = json.dumps(metadata).encode()
+        combined = len(metadata_bytes).to_bytes(4, 'big') + metadata_bytes + plaintext
+        
+        # Encrypt
+        encrypted_data = self.vault.encrypt(combined, password)
+        
+        # Write encrypted file
+        with open(output_path, 'wb') as f:
+            f.write(MAGIC_HEADER)
+            f.write(VERSION.to_bytes(2, 'big'))
+            f.write(len(encrypted_data).to_bytes(8, 'big'))
+            f.write(encrypted_data)
+        
+        return True, output_path
+    
+    def decrypt_file(self, input_path: Path, password: str, output_path: Path = None) -> tuple:
+        """Decrypt a file with password"""
+        with open(input_path, 'rb') as f:
+            magic = f.read(4)
+            if magic != MAGIC_HEADER:
+                return False, "Not a valid QVLT encrypted file!"
+            
+            version = int.from_bytes(f.read(2), 'big')
+            enc_len = int.from_bytes(f.read(8), 'big')
+            encrypted_data = f.read(enc_len)
+        
+        # Decrypt
+        try:
+            decrypted = self.vault.decrypt(encrypted_data, password)
+        except ValueError:
+            return False, "Wrong password!"
+        
+        # Parse metadata
+        metadata_len = int.from_bytes(decrypted[:4], 'big')
+        metadata = json.loads(decrypted[4:4+metadata_len].decode())
+        plaintext = decrypted[4+metadata_len:]
+        
+        # Determine output path
+        if output_path is None:
+            original_name = metadata.get('original_name', 'decrypted_file')
+            output_path = input_path.parent / f"decrypted_{original_name}"
+        
+        # Write decrypted file
+        with open(output_path, 'wb') as f:
+            f.write(plaintext)
+        
+        return True, output_path
 
 
-def load_private_key():
-    """Load private key"""
-    try:
-        with open(KEYS_DIR / "private_key.json", 'r') as f:
-            data = json.load(f)
-        return {
-            'encryption_sk': base64.b64decode(data['encryption_sk']),
-            'signing_sk': base64.b64decode(data['signing_sk']),
-            'num_layers': data['num_layers'],
-            'version': data['version'],
-        }
-    except FileNotFoundError:
-        return None
+# ════════════════════════════════════════════════════════════════════════════════════════
+# CLI FUNCTIONS
+# ════════════════════════════════════════════════════════════════════════════════════════
+
+def generate_key():
+    """Generate a secure random password"""
+    encryptor = FileEncryptor()
+    password = encryptor.generate_password()
+    
+    print()
+    print("🔑 Generated Encryption Key:")
+    print("=" * 60)
+    print(f"  {password}")
+    print("=" * 60)
+    print()
+    print("⚠️  IMPORTANT: Save this key somewhere safe!")
+    print("   You will need it to decrypt your files.")
 
 
 def show_info():
-    """Show key information"""
+    """Show security information"""
+    print()
     print("=" * 60)
-    print("   🔐 QUANTUM FILE ENCRYPTOR - Key Information")
+    print("   🔐 QUANTUM FILE ENCRYPTOR - Security Information")
     print("=" * 60)
     print()
     
-    public_key = load_public_key()
-    if public_key is None:
-        print("❌ No keys found!")
-        print("   Run: python cli.py keygen")
-        return
-    
-    layers = public_key['num_layers']
-    bits = layers * 1024
-    breaking_exp = int(bits * 77 / 256)
-    
-    print(f"✅ Keys Found")
-    print(f"   📂 Location: {KEYS_DIR}")
+    if QUANTUM_AVAILABLE:
+        print("✅ Post-Quantum Encryption ENABLED")
+        print()
+        print("🔒 Security Features:")
+        print("   • ML-KEM-1024 post-quantum key encapsulation (FIPS 203)")
+        print("   • AES-256-GCM authenticated encryption")
+        print("   • Argon2id memory-hard key derivation")
+        print("   • Hybrid encryption: Classical + Post-Quantum")
+        print("   • NIST Level 5 security")
+        print("   • 'Harvest Now, Decrypt Later' protection")
+    else:
+        print("⚠️  Standard Encryption Mode (Quantum not available)")
+        print()
+        print("🔒 Security Features:")
+        print("   • AES-256-GCM authenticated encryption")
+        print("   • Argon2id memory-hard key derivation")
+        print("   • 256-bit security level")
     print()
-    print(f"🔒 Security Configuration:")
-    print(f"   • Layers: {layers}")
-    print(f"   • Security: {bits:,} bits")
-    print(f"   • Breaking time: 10^{breaking_exp} years")
-    print(f"   • Version: {public_key['version']}")
 
 
-# ════════════════════════════════════════════════════════════════════════════════════════
-# ENCRYPTION/DECRYPTION
-# ════════════════════════════════════════════════════════════════════════════════════════
-
-def encrypt_file(input_path: str):
+def encrypt_file(input_path: str, password: str = None):
     """Encrypt a file"""
     input_path = Path(input_path)
     
@@ -155,11 +185,17 @@ def encrypt_file(input_path: str):
         print("❌ File is already encrypted!")
         return
     
-    public_key = load_public_key()
-    if public_key is None:
-        print("❌ No keys found! Generate keys first:")
-        print("   python cli.py keygen")
-        return
+    encryptor = FileEncryptor()
+    
+    # Generate password if not provided
+    if not password:
+        password = encryptor.generate_password()
+        print()
+        print("🔑 Generated Key (SAVE THIS!):")
+        print("=" * 60)
+        print(f"  {password}")
+        print("=" * 60)
+        print()
     
     output_path = input_path.with_suffix(input_path.suffix + ".qenc")
     
@@ -167,53 +203,22 @@ def encrypt_file(input_path: str):
     print("=" * 60)
     print(f"   Input:  {input_path}")
     print(f"   Output: {output_path}")
-    print(f"   Layers: {public_key['num_layers']}")
-    print(f"   Security: {public_key['num_layers'] * 1024:,} bits")
+    print(f"   Mode:   {'Quantum-Resistant' if QUANTUM_AVAILABLE else 'Standard AES-256'}")
     print("=" * 60)
     print()
     
-    # Read file
-    print("📖 Reading file...")
-    with open(input_path, 'rb') as f:
-        plaintext = f.read()
+    success, result = encryptor.encrypt_file(input_path, password, output_path)
     
-    # Create metadata
-    metadata = {
-        'original_name': input_path.name,
-        'original_size': len(plaintext),
-        'encrypted_at': datetime.now().isoformat(),
-    }
-    metadata_bytes = json.dumps(metadata).encode()
-    combined = len(metadata_bytes).to_bytes(4, 'big') + metadata_bytes + plaintext
-    
-    # Encrypt
-    print("🔐 Encrypting with infinite layers...")
-    crypto = InfiniteQuantumEncryption(num_layers=public_key['num_layers'])
-    encrypted = crypto.encrypt(combined, public_key)
-    
-    # Write encrypted file
-    print("💾 Writing encrypted file...")
-    with open(output_path, 'wb') as f:
-        f.write(MAGIC_HEADER)
-        f.write(VERSION.to_bytes(2, 'big'))
-        f.write(encrypted['num_layers'].to_bytes(4, 'big'))
-        
-        ephemeral = encrypted['ephemeral_key']
-        f.write(len(ephemeral).to_bytes(4, 'big'))
-        f.write(ephemeral)
-        
-        enc_data = encrypted['encrypted_data']
-        f.write(len(enc_data).to_bytes(8, 'big'))
-        f.write(enc_data)
-    
-    print()
-    print("✅ ENCRYPTION COMPLETE!")
-    print(f"   📄 Encrypted file: {output_path}")
-    print(f"   📊 Original size: {len(plaintext):,} bytes")
-    print(f"   📊 Encrypted size: {os.path.getsize(output_path):,} bytes")
+    if success:
+        print("✅ ENCRYPTION COMPLETE!")
+        print(f"   📄 Encrypted file: {result}")
+        print(f"   📊 Original size: {input_path.stat().st_size:,} bytes")
+        print(f"   📊 Encrypted size: {result.stat().st_size:,} bytes")
+    else:
+        print(f"❌ Encryption failed: {result}")
 
 
-def decrypt_file(input_path: str):
+def decrypt_file(input_path: str, password: str):
     """Decrypt a file"""
     input_path = Path(input_path)
     
@@ -226,10 +231,11 @@ def decrypt_file(input_path: str):
         print("   Encrypted files have .qenc extension")
         return
     
-    private_key = load_private_key()
-    if private_key is None:
-        print("❌ No private key found! Cannot decrypt.")
+    if not password:
+        print("❌ Password is required for decryption!")
         return
+    
+    encryptor = FileEncryptor()
     
     print("🔓 DECRYPTING FILE")
     print("=" * 60)
@@ -237,53 +243,14 @@ def decrypt_file(input_path: str):
     print("=" * 60)
     print()
     
-    # Read encrypted file
-    print("📖 Reading encrypted file...")
-    with open(input_path, 'rb') as f:
-        magic = f.read(4)
-        if magic != MAGIC_HEADER:
-            print("❌ Not a valid QENC encrypted file!")
-            return
-        
-        version = int.from_bytes(f.read(2), 'big')
-        num_layers = int.from_bytes(f.read(4), 'big')
-        
-        ephemeral_len = int.from_bytes(f.read(4), 'big')
-        ephemeral_key = f.read(ephemeral_len)
-        
-        enc_len = int.from_bytes(f.read(8), 'big')
-        encrypted_data = f.read(enc_len)
+    success, result = encryptor.decrypt_file(input_path, password)
     
-    encrypted = {
-        'ephemeral_key': ephemeral_key,
-        'encrypted_data': encrypted_data,
-        'num_layers': num_layers,
-        'version': "3.0.0-INFINITE",
-    }
-    
-    # Decrypt
-    print(f"🔐 Decrypting {num_layers} layers...")
-    crypto = InfiniteQuantumEncryption(num_layers=num_layers)
-    decrypted = crypto.decrypt(encrypted, private_key)
-    
-    # Parse metadata
-    metadata_len = int.from_bytes(decrypted[:4], 'big')
-    metadata = json.loads(decrypted[4:4+metadata_len].decode())
-    plaintext = decrypted[4+metadata_len:]
-    
-    # Write decrypted file
-    original_name = metadata.get('original_name', 'decrypted_file')
-    output_path = input_path.parent / f"decrypted_{original_name}"
-    
-    print("💾 Writing decrypted file...")
-    with open(output_path, 'wb') as f:
-        f.write(plaintext)
-    
-    print()
-    print("✅ DECRYPTION COMPLETE!")
-    print(f"   📄 Decrypted file: {output_path}")
-    print(f"   📊 Original name: {original_name}")
-    print(f"   📊 Size: {len(plaintext):,} bytes")
+    if success:
+        print("✅ DECRYPTION COMPLETE!")
+        print(f"   📄 Decrypted file: {result}")
+        print(f"   📊 Size: {result.stat().st_size:,} bytes")
+    else:
+        print(f"❌ Decryption failed: {result}")
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════
@@ -296,47 +263,49 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python cli.py keygen                  Generate keys (10 layers)
-  python cli.py keygen --layers 50      Generate keys (50 layers)
-  python cli.py encrypt document.pdf    Encrypt a file
-  python cli.py decrypt document.pdf.qenc  Decrypt a file
-  python cli.py info                    Show key information
+  python cli.py encrypt document.pdf            Encrypt (auto-generates key)
+  python cli.py encrypt doc.pdf -p mypassword   Encrypt with password
+  python cli.py decrypt doc.pdf.qenc -p key     Decrypt with key
+  python cli.py genkey                          Generate a random key
+  python cli.py info                            Show security information
         """
     )
     
     subparsers = parser.add_subparsers(dest='command', help='Commands')
     
-    # keygen command
-    keygen_parser = subparsers.add_parser('keygen', help='Generate encryption keys')
-    keygen_parser.add_argument('--layers', type=int, default=10,
-                               help='Number of encryption layers (default: 10)')
+    # genkey command
+    subparsers.add_parser('genkey', help='Generate a random encryption key')
     
     # encrypt command
     encrypt_parser = subparsers.add_parser('encrypt', help='Encrypt a file')
     encrypt_parser.add_argument('file', help='File to encrypt')
+    encrypt_parser.add_argument('-p', '--password', help='Encryption password/key')
     
     # decrypt command
     decrypt_parser = subparsers.add_parser('decrypt', help='Decrypt a file')
     decrypt_parser.add_argument('file', help='File to decrypt (.qenc)')
+    decrypt_parser.add_argument('-p', '--password', required=True, help='Decryption password/key')
     
     # info command
-    subparsers.add_parser('info', help='Show key information')
+    subparsers.add_parser('info', help='Show security information')
     
     args = parser.parse_args()
     
     print()
     print("╔══════════════════════════════════════════════════════════════╗")
-    print("║   🔐 QUANTUM FILE ENCRYPTOR - Command Line Interface        ║")
-    print("║   Infinite-Layer Quantum-Resistant Encryption               ║")
+    if QUANTUM_AVAILABLE:
+        print("║   🔐 QUANTUM FILE ENCRYPTOR - Post-Quantum Hybrid Encryption║")
+    else:
+        print("║   🔐 QUANTUM FILE ENCRYPTOR - Standard Edition              ║")
     print("╚══════════════════════════════════════════════════════════════╝")
     print()
     
-    if args.command == 'keygen':
-        generate_keys(args.layers)
+    if args.command == 'genkey':
+        generate_key()
     elif args.command == 'encrypt':
-        encrypt_file(args.file)
+        encrypt_file(args.file, args.password)
     elif args.command == 'decrypt':
-        decrypt_file(args.file)
+        decrypt_file(args.file, args.password)
     elif args.command == 'info':
         show_info()
     else:

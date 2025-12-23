@@ -1,12 +1,14 @@
 """
 🔐 QUANTUM FILE ENCRYPTOR - Web-Based GUI
 A modern, WinRAR-like interface with drag-and-drop support
+Uses Post-Quantum Hybrid Encryption (QuantumSecureVault)
 """
 
 import sys
 import os
 import json
 import base64
+import secrets
 import webbrowser
 import threading
 import time
@@ -16,93 +18,48 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 import urllib.parse
 import mimetypes
 
-# Add parent directory
-sys.path.insert(0, str(Path(__file__).parent.parent / "QUANTUM_RESISTANT_ENCRYPTION"))
+# Add local folder and parent directory
+sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(1, str(Path(__file__).parent.parent / "QUANTUM_RESISTANT_ENCRYPTION"))
 
+# Try to import QuantumSecureVault (post-quantum)
 try:
-    from quantum_encryption_infinite import InfiniteQuantumEncryption
+    from secure_vault_quantum import QuantumSecureVault, SecureVault
+    ENCRYPTION_LEVEL = "QUANTUM"
+    QUANTUM_AVAILABLE = True
 except ImportError:
-    print("Error: quantum_encryption_infinite.py not found!")
-    sys.exit(1)
+    try:
+        from secure_vault import SecureVault
+        ENCRYPTION_LEVEL = "STANDARD"
+        QUANTUM_AVAILABLE = False
+    except ImportError:
+        print("Error: No encryption module found!")
+        sys.exit(1)
 
 # Configuration
 PORT = 8765
-KEYS_DIR = Path(__file__).parent / "keys"
-MAGIC_HEADER = b"QENC"
-VERSION = 1
+MAGIC_HEADER = b"QVLT"
+VERSION = 2
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# KEY MANAGEMENT
+# FILE ENCRYPTOR
 # ════════════════════════════════════════════════════════════════════════════════
 
-def has_keys():
-    return (KEYS_DIR / "public_key.json").exists()
+def get_vault():
+    """Get the appropriate vault instance"""
+    if QUANTUM_AVAILABLE:
+        return QuantumSecureVault()
+    return SecureVault()
 
-def generate_keys(layers=10):
-    KEYS_DIR.mkdir(parents=True, exist_ok=True)
-    crypto = InfiniteQuantumEncryption(num_layers=layers)
-    public_key, private_key = crypto.generate_keypair()
-    
-    public_data = {
-        'encryption_pk': base64.b64encode(public_key['encryption_pk']).decode(),
-        'signing_pk': base64.b64encode(public_key['signing_pk']).decode(),
-        'num_layers': public_key['num_layers'],
-        'version': public_key['version'],
-        'created': datetime.now().isoformat(),
-    }
-    
-    private_data = {
-        'encryption_sk': base64.b64encode(private_key['encryption_sk']).decode(),
-        'signing_sk': base64.b64encode(private_key['signing_sk']).decode(),
-        'num_layers': private_key['num_layers'],
-        'version': private_key['version'],
-        'created': datetime.now().isoformat(),
-    }
-    
-    with open(KEYS_DIR / "public_key.json", 'w') as f:
-        json.dump(public_data, f, indent=2)
-    with open(KEYS_DIR / "private_key.json", 'w') as f:
-        json.dump(private_data, f, indent=2)
-    
-    return True
+def generate_password() -> str:
+    """Generate a secure random password"""
+    return base64.b64encode(secrets.token_bytes(32)).decode('ascii')
 
-def load_public_key():
-    try:
-        with open(KEYS_DIR / "public_key.json", 'r') as f:
-            data = json.load(f)
-        return {
-            'encryption_pk': base64.b64decode(data['encryption_pk']),
-            'signing_pk': base64.b64decode(data['signing_pk']),
-            'num_layers': data['num_layers'],
-            'version': data['version'],
-        }
-    except:
-        return None
-
-def load_private_key():
-    try:
-        with open(KEYS_DIR / "private_key.json", 'r') as f:
-            data = json.load(f)
-        return {
-            'encryption_sk': base64.b64decode(data['encryption_sk']),
-            'signing_sk': base64.b64decode(data['signing_sk']),
-            'num_layers': data['num_layers'],
-            'version': data['version'],
-        }
-    except:
-        return None
-
-
-# ════════════════════════════════════════════════════════════════════════════════
-# ENCRYPTION/DECRYPTION
-# ════════════════════════════════════════════════════════════════════════════════
-
-def encrypt_file(file_path):
+def encrypt_file(file_path, password):
+    """Encrypt a file with password"""
     file_path = Path(file_path)
-    public_key = load_public_key()
-    if not public_key:
-        return False, "No keys found"
+    vault = get_vault()
     
     output_path = file_path.with_suffix(file_path.suffix + ".qenc")
     
@@ -113,31 +70,25 @@ def encrypt_file(file_path):
         'original_name': file_path.name,
         'original_size': len(plaintext),
         'encrypted_at': datetime.now().isoformat(),
+        'encryption_level': ENCRYPTION_LEVEL,
     }
     metadata_bytes = json.dumps(metadata).encode()
     combined = len(metadata_bytes).to_bytes(4, 'big') + metadata_bytes + plaintext
     
-    crypto = InfiniteQuantumEncryption(num_layers=public_key['num_layers'])
-    encrypted = crypto.encrypt(combined, public_key)
+    encrypted_data = vault.encrypt(combined, password)
     
     with open(output_path, 'wb') as f:
         f.write(MAGIC_HEADER)
         f.write(VERSION.to_bytes(2, 'big'))
-        f.write(encrypted['num_layers'].to_bytes(4, 'big'))
-        ephemeral = encrypted['ephemeral_key']
-        f.write(len(ephemeral).to_bytes(4, 'big'))
-        f.write(ephemeral)
-        enc_data = encrypted['encrypted_data']
-        f.write(len(enc_data).to_bytes(8, 'big'))
-        f.write(enc_data)
+        f.write(len(encrypted_data).to_bytes(8, 'big'))
+        f.write(encrypted_data)
     
     return True, str(output_path)
 
-def decrypt_file(file_path):
+def decrypt_file(file_path, password):
+    """Decrypt a file with password"""
     file_path = Path(file_path)
-    private_key = load_private_key()
-    if not private_key:
-        return False, "No private key found"
+    vault = get_vault()
     
     with open(file_path, 'rb') as f:
         magic = f.read(4)
@@ -145,21 +96,13 @@ def decrypt_file(file_path):
             return False, "Not a valid encrypted file"
         
         version = int.from_bytes(f.read(2), 'big')
-        num_layers = int.from_bytes(f.read(4), 'big')
-        ephemeral_len = int.from_bytes(f.read(4), 'big')
-        ephemeral_key = f.read(ephemeral_len)
         enc_len = int.from_bytes(f.read(8), 'big')
         encrypted_data = f.read(enc_len)
     
-    encrypted = {
-        'ephemeral_key': ephemeral_key,
-        'encrypted_data': encrypted_data,
-        'num_layers': num_layers,
-        'version': "3.0.0-INFINITE",
-    }
-    
-    crypto = InfiniteQuantumEncryption(num_layers=num_layers)
-    decrypted = crypto.decrypt(encrypted, private_key)
+    try:
+        decrypted = vault.decrypt(encrypted_data, password)
+    except ValueError:
+        return False, "Wrong password!"
     
     metadata_len = int.from_bytes(decrypted[:4], 'big')
     metadata = json.loads(decrypted[4:4+metadata_len].decode())
@@ -187,7 +130,14 @@ class EncryptorHandler(SimpleHTTPRequestHandler):
         if self.path == '/':
             self.path = '/index.html'
         elif self.path == '/api/status':
-            self.send_json({'hasKeys': has_keys(), 'layers': load_public_key()['num_layers'] if has_keys() else 0})
+            self.send_json({
+                'quantumAvailable': QUANTUM_AVAILABLE,
+                'encryptionLevel': ENCRYPTION_LEVEL
+            })
+            return
+        elif self.path == '/api/genkey':
+            password = generate_password()
+            self.send_json({'password': password})
             return
         return super().do_GET()
     
@@ -195,22 +145,20 @@ class EncryptorHandler(SimpleHTTPRequestHandler):
         content_length = int(self.headers['Content-Length'])
         post_data = self.rfile.read(content_length)
         
-        if self.path == '/api/keygen':
-            data = json.loads(post_data)
-            layers = data.get('layers', 10)
-            success = generate_keys(layers)
-            self.send_json({'success': success, 'layers': layers})
-        
-        elif self.path == '/api/encrypt':
+        if self.path == '/api/encrypt':
             data = json.loads(post_data)
             file_path = data.get('path')
-            success, result = encrypt_file(file_path)
-            self.send_json({'success': success, 'result': result})
+            password = data.get('password')
+            if not password:
+                password = generate_password()
+            success, result = encrypt_file(file_path, password)
+            self.send_json({'success': success, 'result': result, 'password': password})
         
         elif self.path == '/api/decrypt':
             data = json.loads(post_data)
             file_path = data.get('path')
-            success, result = decrypt_file(file_path)
+            password = data.get('password')
+            success, result = decrypt_file(file_path, password)
             self.send_json({'success': success, 'result': result})
     
     def send_json(self, data):
@@ -237,6 +185,10 @@ def start_server():
 if __name__ == "__main__":
     print("=" * 60)
     print("   🔐 QUANTUM FILE ENCRYPTOR - Web GUI")
+    if QUANTUM_AVAILABLE:
+        print("   Post-Quantum Hybrid Encryption (ML-KEM-1024)")
+    else:
+        print("   Standard Edition (AES-256-GCM)")
     print("=" * 60)
     print()
     

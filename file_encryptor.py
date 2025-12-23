@@ -1,20 +1,19 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                                  ║
-║   🔐 QUANTUM FILE ENCRYPTOR - GUI Application (FORTRESS EDITION)                                ║
+║   🔐 QUANTUM FILE ENCRYPTOR - GUI Application (QUANTUM VAULT EDITION)                           ║
 ║                                                                                                  ║
-║   A powerful file encryption tool using Quantum Fortress Encryption                             ║
+║   A powerful file encryption tool using Post-Quantum Hybrid Encryption                          ║
 ║                                                                                                  ║
 ║   Security Features:                                                                             ║
-║   • Memory-hard key derivation (Argon2-like)                                                    ║
-║   • Triple hash verification (SHA3 + BLAKE2 + SHAKE256)                                         ║
-║   • 10-layer cascade encryption (10,240 bits)                                                   ║
-║   • Unique S-box per layer                                                                      ║
-║   • Per-layer + Master authentication                                                           ║
-║   • Constant-time operations (side-channel resistant)                                           ║
+║   • ML-KEM-1024 post-quantum key encapsulation (FIPS 203 - August 2024)                         ║
+║   • AES-256-GCM authenticated encryption (AEAD)                                                 ║
+║   • Argon2id memory-hard key derivation                                                         ║
+║   • Hybrid encryption: Classical + Post-Quantum                                                 ║
+║   • NIST Level 5 security (maximum quantum resistance)                                          ║
+║   • "Harvest Now, Decrypt Later" attack protection                                              ║
 ║                                                                                                  ║
-║   Security: 10,240+ bits (configurable)                                                         ║
-║   Breaking Time: 10^3,082+ years                                                                ║
+║   Security: 256-bit classical + Quantum-Resistant                                               ║
 ║                                                                                                  ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 """
@@ -34,17 +33,19 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(1, str(Path(__file__).parent.parent / "QUANTUM_RESISTANT_ENCRYPTION"))
 
-# Try to import Quantum Fortress (best), fall back to Infinite
+# Try to import QuantumSecureVault (post-quantum)
 try:
-    from quantum_fortress import QuantumFortress
-    ENCRYPTION_LEVEL = "FORTRESS"
+    from secure_vault_quantum import QuantumSecureVault, SecureVault
+    ENCRYPTION_LEVEL = "QUANTUM"
+    QUANTUM_AVAILABLE = True
 except ImportError:
     try:
-        from quantum_encryption_infinite import InfiniteQuantumEncryption
-        ENCRYPTION_LEVEL = "INFINITE"
+        from secure_vault import SecureVault
+        ENCRYPTION_LEVEL = "STANDARD"
+        QUANTUM_AVAILABLE = False
     except ImportError:
         print("Error: No encryption module found!")
-        print("Make sure quantum_fortress.py or quantum_encryption_infinite.py exists.")
+        print("Make sure secure_vault_quantum.py or secure_vault.py exists.")
         sys.exit(1)
 
 
@@ -77,113 +78,35 @@ class Theme:
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════
-# KEY MANAGER
-# ════════════════════════════════════════════════════════════════════════════════════════
-
-class KeyManager:
-    """Manages encryption keys"""
-    
-    def __init__(self, keys_dir: str):
-        self.keys_dir = Path(keys_dir)
-        self.keys_dir.mkdir(parents=True, exist_ok=True)
-        self.public_key_file = self.keys_dir / "public_key.json"
-        self.private_key_file = self.keys_dir / "private_key.json"
-    
-    def generate_keys(self, num_layers: int = 10) -> bool:
-        """Generate new key pair"""
-        try:
-            crypto = InfiniteQuantumEncryption(num_layers=num_layers)
-            public_key, private_key = crypto.generate_keypair()
-            
-            # Serialize keys (convert bytes to base64)
-            public_data = {
-                'encryption_pk': base64.b64encode(public_key['encryption_pk']).decode(),
-                'signing_pk': base64.b64encode(public_key['signing_pk']).decode(),
-                'num_layers': public_key['num_layers'],
-                'version': public_key['version'],
-                'created': datetime.now().isoformat(),
-            }
-            
-            private_data = {
-                'encryption_sk': base64.b64encode(private_key['encryption_sk']).decode(),
-                'signing_sk': base64.b64encode(private_key['signing_sk']).decode(),
-                'num_layers': private_key['num_layers'],
-                'version': private_key['version'],
-                'created': datetime.now().isoformat(),
-            }
-            
-            with open(self.public_key_file, 'w') as f:
-                json.dump(public_data, f, indent=2)
-            
-            with open(self.private_key_file, 'w') as f:
-                json.dump(private_data, f, indent=2)
-            
-            return True
-        except Exception as e:
-            print(f"Error generating keys: {e}")
-            return False
-    
-    def load_public_key(self) -> dict:
-        """Load public key"""
-        if not self.public_key_file.exists():
-            return None
-        
-        with open(self.public_key_file, 'r') as f:
-            data = json.load(f)
-        
-        return {
-            'encryption_pk': base64.b64decode(data['encryption_pk']),
-            'signing_pk': base64.b64decode(data['signing_pk']),
-            'num_layers': data['num_layers'],
-            'version': data['version'],
-        }
-    
-    def load_private_key(self) -> dict:
-        """Load private key"""
-        if not self.private_key_file.exists():
-            return None
-        
-        with open(self.private_key_file, 'r') as f:
-            data = json.load(f)
-        
-        return {
-            'encryption_sk': base64.b64decode(data['encryption_sk']),
-            'signing_sk': base64.b64decode(data['signing_sk']),
-            'num_layers': data['num_layers'],
-            'version': data['version'],
-        }
-    
-    def has_keys(self) -> bool:
-        """Check if keys exist"""
-        return self.public_key_file.exists() and self.private_key_file.exists()
-
-
-# ════════════════════════════════════════════════════════════════════════════════════════
 # FILE ENCRYPTOR ENGINE
 # ════════════════════════════════════════════════════════════════════════════════════════
 
 class FileEncryptor:
-    """Handles file encryption/decryption"""
+    """Handles file encryption/decryption using QuantumSecureVault"""
     
-    MAGIC_HEADER = b"QENC"  # Quantum Encrypted file header
-    VERSION = 1
+    MAGIC_HEADER = b"QVLT"  # Quantum VauLT
+    VERSION = 2
     
-    def __init__(self, key_manager: KeyManager):
-        self.key_manager = key_manager
+    def __init__(self):
+        if QUANTUM_AVAILABLE:
+            self.vault = QuantumSecureVault()
+        else:
+            self.vault = SecureVault()
     
-    def encrypt_file(self, input_path: str, output_path: str = None, 
-                     progress_callback=None) -> bool:
-        """Encrypt a file"""
+    def generate_password(self) -> str:
+        """Generate a secure random password/key"""
+        # Generate 32 bytes of random data and encode as base64
+        return base64.b64encode(secrets.token_bytes(32)).decode('ascii')
+    
+    def encrypt_file(self, input_path: str, password: str, output_path: str = None, 
+                     progress_callback=None) -> tuple:
+        """Encrypt a file with password"""
         try:
             input_path = Path(input_path)
             if output_path is None:
                 output_path = input_path.with_suffix(input_path.suffix + ".qenc")
             else:
                 output_path = Path(output_path)
-            
-            public_key = self.key_manager.load_public_key()
-            if public_key is None:
-                raise ValueError("No public key found! Generate keys first.")
             
             # Read file
             if progress_callback:
@@ -197,6 +120,7 @@ class FileEncryptor:
                 'original_name': input_path.name,
                 'original_size': len(plaintext),
                 'encrypted_at': datetime.now().isoformat(),
+                'encryption_level': ENCRYPTION_LEVEL,
             }
             metadata_bytes = json.dumps(metadata).encode()
             
@@ -206,9 +130,8 @@ class FileEncryptor:
             if progress_callback:
                 progress_callback(20, "Encrypting with quantum-resistant algorithm...")
             
-            # Encrypt
-            crypto = InfiniteQuantumEncryption(num_layers=public_key['num_layers'])
-            encrypted = crypto.encrypt(combined, public_key)
+            # Encrypt using QuantumSecureVault
+            encrypted_data = self.vault.encrypt(combined, password)
             
             if progress_callback:
                 progress_callback(80, "Writing encrypted file...")
@@ -218,17 +141,9 @@ class FileEncryptor:
                 # Write header
                 f.write(self.MAGIC_HEADER)
                 f.write(self.VERSION.to_bytes(2, 'big'))
-                f.write(encrypted['num_layers'].to_bytes(4, 'big'))
-                
-                # Write ephemeral key
-                ephemeral = encrypted['ephemeral_key']
-                f.write(len(ephemeral).to_bytes(4, 'big'))
-                f.write(ephemeral)
-                
-                # Write encrypted data
-                enc_data = encrypted['encrypted_data']
-                f.write(len(enc_data).to_bytes(8, 'big'))
-                f.write(enc_data)
+                # Write encrypted data length and data
+                f.write(len(encrypted_data).to_bytes(8, 'big'))
+                f.write(encrypted_data)
             
             if progress_callback:
                 progress_callback(100, "Encryption complete!")
@@ -238,15 +153,11 @@ class FileEncryptor:
         except Exception as e:
             return False, str(e)
     
-    def decrypt_file(self, input_path: str, output_path: str = None,
-                     progress_callback=None) -> bool:
-        """Decrypt a file"""
+    def decrypt_file(self, input_path: str, password: str, output_path: str = None,
+                     progress_callback=None) -> tuple:
+        """Decrypt a file with password"""
         try:
             input_path = Path(input_path)
-            
-            private_key = self.key_manager.load_private_key()
-            if private_key is None:
-                raise ValueError("No private key found! Cannot decrypt.")
             
             if progress_callback:
                 progress_callback(0, "Reading encrypted file...")
@@ -255,14 +166,9 @@ class FileEncryptor:
                 # Read and verify header
                 magic = f.read(4)
                 if magic != self.MAGIC_HEADER:
-                    raise ValueError("Not a valid QENC encrypted file!")
+                    raise ValueError("Not a valid QVLT encrypted file!")
                 
                 version = int.from_bytes(f.read(2), 'big')
-                num_layers = int.from_bytes(f.read(4), 'big')
-                
-                # Read ephemeral key
-                ephemeral_len = int.from_bytes(f.read(4), 'big')
-                ephemeral_key = f.read(ephemeral_len)
                 
                 # Read encrypted data
                 enc_len = int.from_bytes(f.read(8), 'big')
@@ -271,17 +177,11 @@ class FileEncryptor:
             if progress_callback:
                 progress_callback(20, "Decrypting with quantum-resistant algorithm...")
             
-            # Prepare encrypted structure
-            encrypted = {
-                'ephemeral_key': ephemeral_key,
-                'encrypted_data': encrypted_data,
-                'num_layers': num_layers,
-                'version': "3.0.0-INFINITE",
-            }
-            
-            # Decrypt
-            crypto = InfiniteQuantumEncryption(num_layers=num_layers)
-            decrypted = crypto.decrypt(encrypted, private_key)
+            # Decrypt using QuantumSecureVault
+            try:
+                decrypted = self.vault.decrypt(encrypted_data, password)
+            except ValueError:
+                return False, "Wrong password! The password you entered is incorrect."
             
             if progress_callback:
                 progress_callback(70, "Extracting original file...")
@@ -322,27 +222,22 @@ class QuantumFileEncryptorApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("🔐 Quantum File Encryptor")
-        self.root.geometry("800x600")
+        self.root.geometry("800x650")
         self.root.configure(bg=Theme.BG_DARK)
-        self.root.minsize(700, 500)
+        self.root.minsize(700, 550)
         
         # Initialize components
-        app_dir = Path(__file__).parent
-        self.key_manager = KeyManager(app_dir / "keys")
-        self.file_encryptor = FileEncryptor(self.key_manager)
+        self.file_encryptor = FileEncryptor()
         
         # Selected file
         self.selected_file = None
-        self.num_layers = tk.IntVar(value=10)
+        self.current_password = tk.StringVar()
         
         # Build UI
         self._create_styles()
         self._create_header()
         self._create_main_content()
         self._create_status_bar()
-        
-        # Check for existing keys
-        self._update_key_status()
     
     def _create_styles(self):
         """Create custom styles"""
@@ -386,15 +281,23 @@ class QuantumFileEncryptorApp:
         title.pack()
         
         # Subtitle
-        subtitle = tk.Label(header, 
-                           text="Infinite-Layer Quantum-Resistant Encryption",
+        if QUANTUM_AVAILABLE:
+            subtitle_text = "Post-Quantum Hybrid Encryption (ML-KEM-1024 + AES-256-GCM)"
+        else:
+            subtitle_text = "Industry-Standard Encryption (AES-256-GCM + Argon2id)"
+        
+        subtitle = tk.Label(header, text=subtitle_text,
                            bg=Theme.BG_DARK, fg=Theme.TEXT_SECONDARY,
                            font=("Segoe UI", 11))
         subtitle.pack()
         
         # Security badge
-        security = tk.Label(header,
-                           text="🛡️ 10,240-bit Security | 10^3,082 Years to Break",
+        if QUANTUM_AVAILABLE:
+            badge_text = "🛡️ NIST Level 5 | Quantum-Resistant | FIPS 203"
+        else:
+            badge_text = "🛡️ 256-bit Security | AES-256-GCM"
+        
+        security = tk.Label(header, text=badge_text,
                            bg=Theme.BG_DARK, fg=Theme.ACCENT_GREEN,
                            font=("Segoe UI", 10))
         security.pack(pady=(10, 0))
@@ -404,72 +307,17 @@ class QuantumFileEncryptorApp:
         main = tk.Frame(self.root, bg=Theme.BG_DARK, padx=40)
         main.pack(fill=tk.BOTH, expand=True)
         
-        # Key Management Section
-        self._create_key_section(main)
-        
         # File Selection Section
         self._create_file_section(main)
+        
+        # Password Section
+        self._create_password_section(main)
         
         # Action Buttons Section
         self._create_action_section(main)
         
         # Progress Section
         self._create_progress_section(main)
-    
-    def _create_key_section(self, parent):
-        """Create key management section"""
-        section = tk.Frame(parent, bg=Theme.BG_MEDIUM, padx=20, pady=15)
-        section.pack(fill=tk.X, pady=(0, 20))
-        
-        # Section title
-        title = tk.Label(section, text="🔑 Key Management",
-                        bg=Theme.BG_MEDIUM, fg=Theme.TEXT_PRIMARY,
-                        font=("Segoe UI", 12, "bold"))
-        title.pack(anchor=tk.W)
-        
-        # Key status
-        self.key_status_label = tk.Label(section, text="Checking keys...",
-                                         bg=Theme.BG_MEDIUM, fg=Theme.TEXT_SECONDARY,
-                                         font=("Segoe UI", 10))
-        self.key_status_label.pack(anchor=tk.W, pady=(5, 10))
-        
-        # Buttons row
-        btn_row = tk.Frame(section, bg=Theme.BG_MEDIUM)
-        btn_row.pack(fill=tk.X)
-        
-        # Generate keys button
-        self.gen_keys_btn = tk.Button(btn_row, text="⚡ Generate New Keys",
-                                      bg=Theme.ACCENT_PURPLE, fg=Theme.TEXT_PRIMARY,
-                                      font=("Segoe UI", 10, "bold"),
-                                      relief=tk.FLAT, padx=20, pady=8,
-                                      cursor="hand2",
-                                      command=self._generate_keys)
-        self.gen_keys_btn.pack(side=tk.LEFT)
-        
-        # Layers selector
-        layers_frame = tk.Frame(btn_row, bg=Theme.BG_MEDIUM)
-        layers_frame.pack(side=tk.LEFT, padx=(20, 0))
-        
-        tk.Label(layers_frame, text="Layers:", bg=Theme.BG_MEDIUM,
-                fg=Theme.TEXT_SECONDARY, font=("Segoe UI", 10)).pack(side=tk.LEFT)
-        
-        layers_spin = tk.Spinbox(layers_frame, from_=1, to=100,
-                                 textvariable=self.num_layers, width=5,
-                                 font=("Segoe UI", 10),
-                                 bg=Theme.BG_LIGHT, fg=Theme.TEXT_PRIMARY,
-                                 buttonbackground=Theme.BG_HOVER)
-        layers_spin.pack(side=tk.LEFT, padx=5)
-        
-        security_bits = tk.Label(layers_frame, text="= 10,240 bits",
-                                bg=Theme.BG_MEDIUM, fg=Theme.ACCENT_GREEN,
-                                font=("Segoe UI", 10))
-        security_bits.pack(side=tk.LEFT)
-        
-        def update_bits(*args):
-            bits = self.num_layers.get() * 1024
-            security_bits.config(text=f"= {bits:,} bits")
-        
-        self.num_layers.trace('w', update_bits)
     
     def _create_file_section(self, parent):
         """Create file selection section"""
@@ -499,6 +347,54 @@ class QuantumFileEncryptorApp:
                               cursor="hand2",
                               command=self._browse_file)
         browse_btn.pack(side=tk.RIGHT)
+    
+    def _create_password_section(self, parent):
+        """Create password entry section"""
+        section = tk.Frame(parent, bg=Theme.BG_MEDIUM, padx=20, pady=15)
+        section.pack(fill=tk.X, pady=(0, 20))
+        
+        # Section title
+        title = tk.Label(section, text="🔑 Encryption Key / Password",
+                        bg=Theme.BG_MEDIUM, fg=Theme.TEXT_PRIMARY,
+                        font=("Segoe UI", 12, "bold"))
+        title.pack(anchor=tk.W)
+        
+        # Password entry frame
+        pwd_frame = tk.Frame(section, bg=Theme.BG_LIGHT, padx=15, pady=10)
+        pwd_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        self.password_entry = tk.Entry(pwd_frame, textvariable=self.current_password,
+                                       bg=Theme.BG_HOVER, fg=Theme.TEXT_PRIMARY,
+                                       font=("Consolas", 11), show="*",
+                                       insertbackground=Theme.TEXT_PRIMARY)
+        self.password_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        
+        # Toggle show/hide
+        self.show_password = tk.BooleanVar(value=False)
+        show_btn = tk.Checkbutton(pwd_frame, text="👁", 
+                                 variable=self.show_password,
+                                 command=self._toggle_password,
+                                 bg=Theme.BG_LIGHT, fg=Theme.TEXT_PRIMARY,
+                                 selectcolor=Theme.BG_HOVER,
+                                 activebackground=Theme.BG_LIGHT,
+                                 font=("Segoe UI", 12))
+        show_btn.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Generate key button
+        gen_btn = tk.Button(pwd_frame, text="⚡ Generate",
+                           bg=Theme.ACCENT_PURPLE, fg=Theme.TEXT_PRIMARY,
+                           font=("Segoe UI", 10),
+                           relief=tk.FLAT, padx=15, pady=5,
+                           cursor="hand2",
+                           command=self._generate_password)
+        gen_btn.pack(side=tk.RIGHT)
+        
+        # Info text
+        info = tk.Label(section, 
+                       text="💡 For encryption: Generate a new key and save it. For decryption: Enter the key you used.",
+                       bg=Theme.BG_MEDIUM, fg=Theme.TEXT_MUTED,
+                       font=("Segoe UI", 9))
+        info.pack(anchor=tk.W, pady=(10, 0))
     
     def _create_action_section(self, parent):
         """Create action buttons section"""
@@ -544,64 +440,39 @@ class QuantumFileEncryptorApp:
         status.pack(fill=tk.X, side=tk.BOTTOM)
         
         # Version
-        version = tk.Label(status, text="v3.0 | Infinite-Layer Encryption",
+        version = tk.Label(status, text="v2.0 | Post-Quantum Hybrid Encryption",
                           bg=Theme.BG_LIGHT, fg=Theme.TEXT_MUTED,
                           font=("Segoe UI", 9))
         version.pack(side=tk.LEFT)
         
         # Security indicator
-        security = tk.Label(status, text="🔒 Quantum-Resistant",
+        if QUANTUM_AVAILABLE:
+            sec_text = "🔒 Quantum-Resistant"
+        else:
+            sec_text = "🔒 AES-256-GCM"
+        
+        security = tk.Label(status, text=sec_text,
                            bg=Theme.BG_LIGHT, fg=Theme.ACCENT_GREEN,
                            font=("Segoe UI", 9))
         security.pack(side=tk.RIGHT)
     
-    def _update_key_status(self):
-        """Update key status display"""
-        if self.key_manager.has_keys():
-            public_key = self.key_manager.load_public_key()
-            layers = public_key.get('num_layers', 10)
-            bits = layers * 1024
-            self.key_status_label.config(
-                text=f"✅ Keys loaded ({layers} layers = {bits:,} bits)",
-                fg=Theme.ACCENT_GREEN
-            )
+    def _toggle_password(self):
+        """Toggle password visibility"""
+        if self.show_password.get():
+            self.password_entry.config(show="")
         else:
-            self.key_status_label.config(
-                text="⚠️ No keys found - Generate keys first!",
-                fg=Theme.ACCENT_YELLOW
-            )
+            self.password_entry.config(show="*")
     
-    def _generate_keys(self):
-        """Generate new encryption keys"""
-        if self.key_manager.has_keys():
-            if not messagebox.askyesno("Confirm",
-                                       "This will overwrite existing keys!\n"
-                                       "You won't be able to decrypt files encrypted with old keys.\n\n"
-                                       "Continue?"):
-                return
-        
-        layers = self.num_layers.get()
-        self._update_progress(0, f"Generating {layers}-layer keys...")
-        
-        def generate():
-            success = self.key_manager.generate_keys(layers)
-            self.root.after(0, lambda: self._on_keys_generated(success, layers))
-        
-        threading.Thread(target=generate, daemon=True).start()
-    
-    def _on_keys_generated(self, success, layers):
-        """Called when key generation completes"""
-        if success:
-            bits = layers * 1024
-            self._update_progress(100, f"Keys generated! ({bits:,} bits)")
-            self._update_key_status()
-            messagebox.showinfo("Success",
-                               f"Keys generated successfully!\n\n"
-                               f"Security: {layers} layers = {bits:,} bits\n"
-                               f"Breaking time: 10^{int(bits * 77 / 256)} years")
-        else:
-            self._update_progress(0, "Key generation failed!")
-            messagebox.showerror("Error", "Failed to generate keys!")
+    def _generate_password(self):
+        """Generate a secure password"""
+        password = self.file_encryptor.generate_password()
+        self.current_password.set(password)
+        self.password_entry.config(show="")  # Show the generated password
+        self.show_password.set(True)
+        messagebox.showinfo("Key Generated", 
+                           "A secure encryption key has been generated!\n\n"
+                           "⚠️ IMPORTANT: Copy and save this key somewhere safe.\n"
+                           "You will need it to decrypt your files.")
     
     def _browse_file(self):
         """Open file browser"""
@@ -638,8 +509,9 @@ class QuantumFileEncryptorApp:
             messagebox.showwarning("No File", "Please select a file first!")
             return
         
-        if not self.key_manager.has_keys():
-            messagebox.showwarning("No Keys", "Please generate keys first!")
+        password = self.current_password.get()
+        if not password:
+            messagebox.showwarning("No Password", "Please enter a password or generate a key first!")
             return
         
         if self.selected_file.endswith('.qenc'):
@@ -654,7 +526,7 @@ class QuantumFileEncryptorApp:
                 self.root.after(0, lambda: self._update_progress(pct, msg))
             
             success, result = self.file_encryptor.encrypt_file(
-                self.selected_file, progress_callback=progress
+                self.selected_file, password, progress_callback=progress
             )
             
             self.root.after(0, lambda: self._on_encrypt_complete(success, result))
@@ -667,8 +539,9 @@ class QuantumFileEncryptorApp:
             messagebox.showwarning("No File", "Please select a file first!")
             return
         
-        if not self.key_manager.has_keys():
-            messagebox.showwarning("No Keys", "Please generate/load keys first!")
+        password = self.current_password.get()
+        if not password:
+            messagebox.showwarning("No Password", "Please enter the decryption password/key!")
             return
         
         if not self.selected_file.endswith('.qenc'):
@@ -684,7 +557,7 @@ class QuantumFileEncryptorApp:
                 self.root.after(0, lambda: self._update_progress(pct, msg))
             
             success, result = self.file_encryptor.decrypt_file(
-                self.selected_file, progress_callback=progress
+                self.selected_file, password, progress_callback=progress
             )
             
             self.root.after(0, lambda: self._on_decrypt_complete(success, result))
@@ -698,7 +571,8 @@ class QuantumFileEncryptorApp:
         if success:
             messagebox.showinfo("Encrypted!",
                                f"File encrypted successfully!\n\n"
-                               f"Saved to:\n{result}")
+                               f"Saved to:\n{result}\n\n"
+                               f"⚠️ Remember to save your encryption key!")
         else:
             messagebox.showerror("Error", f"Encryption failed:\n{result}")
     
@@ -722,13 +596,11 @@ class QuantumFileEncryptorApp:
         """Disable buttons during operation"""
         self.encrypt_btn.config(state=tk.DISABLED)
         self.decrypt_btn.config(state=tk.DISABLED)
-        self.gen_keys_btn.config(state=tk.DISABLED)
     
     def _enable_buttons(self):
         """Enable buttons after operation"""
         self.encrypt_btn.config(state=tk.NORMAL)
         self.decrypt_btn.config(state=tk.NORMAL)
-        self.gen_keys_btn.config(state=tk.NORMAL)
     
     def run(self):
         """Start the application"""
@@ -742,7 +614,10 @@ class QuantumFileEncryptorApp:
 if __name__ == "__main__":
     print("=" * 60)
     print("   🔐 QUANTUM FILE ENCRYPTOR")
-    print("   Infinite-Layer Quantum-Resistant Encryption")
+    if QUANTUM_AVAILABLE:
+        print("   Post-Quantum Hybrid Encryption (ML-KEM-1024)")
+    else:
+        print("   Industry-Standard Encryption (AES-256-GCM)")
     print("=" * 60)
     print()
     print("Starting GUI application...")

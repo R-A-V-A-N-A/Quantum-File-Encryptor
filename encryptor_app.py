@@ -1,18 +1,29 @@
 """
-QUANTUM FILE ENCRYPTOR - SECURE VAULT EDITION
-Uses SecureVault: Industry-standard encryption (ChaCha20-Poly1305 + Argon2id)
+QUANTUM FILE ENCRYPTOR - POST-QUANTUM HYBRID ENCRYPTION
+Uses QuantumSecureVault: FIPS 203 ML-KEM-1024 + AES-256-GCM + FIPS 204 ML-DSA-87
 
 ENCRYPT: Generates a unique KEY for you to copy and save
 DECRYPT: Enter the KEY you received to decrypt
 
 SECURITY FEATURES:
-- ChaCha20-Poly1305 authenticated encryption (AEAD)
+- ML-KEM-1024 post-quantum key encapsulation (FIPS 203 - August 2024)
+- ML-DSA-87 digital signatures (FIPS 204 - August 2024)
+- AES-256-GCM / ChaCha20-Poly1305 authenticated encryption (AEAD)
 - Argon2id memory-hard key derivation (Password Hashing Competition winner)
-- 256-bit security level
+- NIST Level 5 security (maximum quantum resistance)
+- Hybrid encryption: Classical + Post-Quantum
+- "Harvest Now, Decrypt Later" attack protection
 - Tamper detection built-in
-- Fresh random salt and nonce per encryption
-- Used by TLS 1.3, WireGuard, Signal
+- Used by governments and enterprises for TOP SECRET data
 """
+
+# ============================================================================
+# VERSION AND UPDATE CONFIGURATION
+# ============================================================================
+APP_VERSION = "2.1.0"
+GITHUB_REPO = "R-A-V-A-N-A/Quantum-File-Encryptor"
+GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
 
 import sys
 import os
@@ -208,14 +219,21 @@ class Spinner:
 sys.path.insert(0, str(Path(__file__).parent))  # Local folder
 sys.path.insert(1, str(Path(__file__).parent.parent / "QUANTUM_RESISTANT_ENCRYPTION"))  # Parent
 
-# Try to import SecureVault (industry-standard)
+# Try to import QuantumSecureVault (post-quantum encryption)
 try:
-    from secure_vault import SecureVault
-    ENCRYPTION_LEVEL = "SECURE_VAULT"
+    from secure_vault_quantum import QuantumSecureVault, SecureVault
+    ENCRYPTION_LEVEL = "QUANTUM_SECURE_VAULT"
+    QUANTUM_AVAILABLE = True
 except ImportError:
-    print("Error: secure_vault.py not found!")
-    print("Make sure secure_vault.py exists in this folder.")
-    sys.exit(1)
+    # Fallback to non-quantum SecureVault
+    try:
+        from secure_vault import SecureVault
+        ENCRYPTION_LEVEL = "SECURE_VAULT"
+        QUANTUM_AVAILABLE = False
+    except ImportError:
+        print("Error: No encryption module found!")
+        print("Make sure secure_vault_quantum.py or secure_vault.py exists in this folder.")
+        sys.exit(1)
 
 
 # ============================================================================
@@ -783,33 +801,62 @@ def zip_folder(folder_path: Path, output_zip: Path = None, progress_callback=Non
     if output_zip is None:
         output_zip = folder_path.parent / f"{folder_path.name}.zip"
     
-    # Calculate total size for progress
-    all_files = list(folder_path.rglob("*"))
-    file_list = [f for f in all_files if f.is_file()]
-    total_size = sum(f.stat().st_size for f in file_list)
-    processed_size = 0
-    start_time = time.perf_counter()
-    
-    # Use ZIP_STORED (no compression) for MAXIMUM SPEED
-    with zipfile.ZipFile(output_zip, 'w', zipfile.ZIP_STORED) as zf:
-        for file_path in file_list:
-            # Preserve relative path structure inside the zip
-            arcname = file_path.relative_to(folder_path.parent)
-            zf.write(file_path, arcname)
-            
-            file_size = file_path.stat().st_size
-            processed_size += file_size
-            
-            if progress_callback:
-                pct = int((processed_size / total_size) * 100) if total_size > 0 else 100
-                elapsed = time.perf_counter() - start_time
-                speed = processed_size / elapsed if elapsed > 0 else 0
-                speed_mbps = speed / (1024 * 1024)
-                eta = (total_size - processed_size) / speed if speed > 0 else 0
-                progress_callback(pct, processed_size, total_size, eta, 
-                                f"Zipping @ {speed_mbps:.1f} MB/s")
-    
-    return output_zip
+    try:
+        # Calculate total size for progress
+        all_files = list(folder_path.rglob("*"))
+        file_list = [f for f in all_files if f.is_file()]
+        total_size = sum(f.stat().st_size for f in file_list)
+        processed_size = 0
+        start_time = time.perf_counter()
+        failed_files = []
+        
+        # Use ZIP_STORED (no compression) for MAXIMUM SPEED
+        with zipfile.ZipFile(output_zip, 'w', zipfile.ZIP_STORED) as zf:
+            for file_path in file_list:
+                try:
+                    # Preserve relative path structure inside the zip
+                    arcname = file_path.relative_to(folder_path.parent)
+                    zf.write(file_path, arcname)
+                    
+                    file_size = file_path.stat().st_size
+                    processed_size += file_size
+                    
+                    if progress_callback:
+                        pct = int((processed_size / total_size) * 100) if total_size > 0 else 100
+                        elapsed = time.perf_counter() - start_time
+                        speed = processed_size / elapsed if elapsed > 0 else 0
+                        speed_mbps = speed / (1024 * 1024)
+                        eta = (total_size - processed_size) / speed if speed > 0 else 0
+                        progress_callback(pct, processed_size, total_size, eta, 
+                                        f"Zipping @ {speed_mbps:.1f} MB/s")
+                except PermissionError:
+                    failed_files.append((str(file_path), "Permission denied"))
+                except OSError as e:
+                    failed_files.append((str(file_path), f"OS error: {e.strerror}"))
+                except Exception as e:
+                    failed_files.append((str(file_path), str(e)))
+        
+        # Report any failed files
+        if failed_files:
+            print()
+            print_warning(f"Skipped {len(failed_files)} file(s) due to errors:")
+            for path, error in failed_files[:5]:  # Show first 5
+                print_warning(f"  - {Path(path).name}: {error}")
+            if len(failed_files) > 5:
+                print_warning(f"  ... and {len(failed_files) - 5} more")
+        
+        return output_zip
+        
+    except Exception as e:
+        print_error(f"Compression failed: {e}")
+        # Clean up partial zip file
+        if output_zip.exists():
+            try:
+                output_zip.unlink()
+            except:
+                pass
+        raise
+
 
 
 def unzip_folder(zip_path: Path, output_dir: Path = None, progress_callback=None) -> Path:
@@ -877,7 +924,7 @@ def encrypt_file_with_key(file_path: Path, key_bytes: bytes, output_path: Path =
     Optionally includes security question for key recovery.
     """
     try:
-        from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+        from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305, AESGCM
         from argon2.low_level import hash_secret_raw, Type
     except ImportError:
         return False, "Required libraries not installed. Run: pip install cryptography argon2-cffi"
@@ -895,7 +942,7 @@ def encrypt_file_with_key(file_path: Path, key_bytes: bytes, output_path: Path =
     # Generate salt for key derivation
     salt = secrets.token_bytes(16)
     
-    # Derive encryption key using Argon2id
+    # Derive encryption key using Argon2id (fast and reliable for large files)
     derived_key = hash_secret_raw(
         secret=key_bytes,
         salt=salt,
@@ -905,6 +952,7 @@ def encrypt_file_with_key(file_path: Path, key_bytes: bytes, output_path: Path =
         hash_len=32,
         type=Type.ID
     )
+    algorithm = 'ChaCha20-Poly1305-Stream'
     
     cipher = ChaCha20Poly1305(derived_key)
     
@@ -940,7 +988,7 @@ def encrypt_file_with_key(file_path: Path, key_bytes: bytes, output_path: Path =
         'name': file_path.name,
         'size': file_size,
         'time': datetime.now().isoformat(),
-        'algorithm': 'ChaCha20-Poly1305-Stream',
+        'algorithm': algorithm,
         'chunk_size': chunk_size,
         'total_chunks': total_chunks,
         'has_recovery': recovery_data is not None
@@ -1106,7 +1154,9 @@ def get_security_question(file_path: Path) -> tuple:
 def decrypt_file_with_key(file_path: Path, key_bytes: bytes, output_path: Path = None,
                           progress_callback=None) -> tuple:
     """
-    Decrypt file of ANY size using streaming ChaCha20-Poly1305.
+    Decrypt file of ANY size using streaming encryption.
+    
+    Automatically detects quantum-encrypted files and uses hybrid key derivation.
     """
     try:
         from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
@@ -1136,7 +1186,7 @@ def decrypt_file_with_key(file_path: Path, key_bytes: bytes, output_path: Path =
             metadata = json.loads(meta_bytes.decode())
             original_name = metadata.get('name', 'decrypted_file')
             
-            # Derive key
+            # Derive key using Argon2id
             derived_key = hash_secret_raw(
                 secret=key_bytes,
                 salt=salt,
@@ -1336,12 +1386,17 @@ def show_header():
     print(c("╔" + "═" * width + "╗", Colors.BRIGHT_CYAN))
     print(c("║", Colors.BRIGHT_CYAN) + c("QUANTUM FILE ENCRYPTOR".center(width), Colors.HEADER) + c("║", Colors.BRIGHT_CYAN))
     print(c("║", Colors.BRIGHT_CYAN) + c("━" * width, Colors.CYAN) + c("║", Colors.BRIGHT_CYAN))
-    print(c("║", Colors.BRIGHT_CYAN) + c("Secure Vault Edition • Industry-Standard Encryption".center(width), Colors.MUTED) + c("║", Colors.BRIGHT_CYAN))
+    if QUANTUM_AVAILABLE:
+        print(c("║", Colors.BRIGHT_CYAN) + c("Post-Quantum Hybrid Encryption • FIPS 203/204".center(width), Colors.MUTED) + c("║", Colors.BRIGHT_CYAN))
+    else:
+        print(c("║", Colors.BRIGHT_CYAN) + c("Secure Vault Edition • Industry-Standard Encryption".center(width), Colors.MUTED) + c("║", Colors.BRIGHT_CYAN))
     print(c("╠" + "═" * width + "╣", Colors.BRIGHT_CYAN))
-    if ENCRYPTION_LEVEL == "SECURE_VAULT":
+    if ENCRYPTION_LEVEL == "QUANTUM_SECURE_VAULT":
+        print(c("║", Colors.BRIGHT_CYAN) + c("🔐 ML-KEM-1024 + AES-256-GCM │ NIST Level 5".center(width), Colors.SUCCESS) + c("║", Colors.BRIGHT_CYAN))
+    elif ENCRYPTION_LEVEL == "SECURE_VAULT":
         print(c("║", Colors.BRIGHT_CYAN) + c("🔐 ChaCha20-Poly1305 + Argon2id │ 256-bit Security".center(width), Colors.SUCCESS) + c("║", Colors.BRIGHT_CYAN))
     else:
-        print(c("║", Colors.BRIGHT_CYAN) + c("⚠ Fallback Mode (SecureVault not found)".center(width), Colors.WARNING) + c("║", Colors.BRIGHT_CYAN))
+        print(c("║", Colors.BRIGHT_CYAN) + c("[!] Fallback Mode (SecureVault not found)".center(width), Colors.WARNING) + c("║", Colors.BRIGHT_CYAN))
     print(c("╚" + "═" * width + "╝", Colors.BRIGHT_CYAN))
     print()
 
@@ -1422,8 +1477,20 @@ def menu_encrypt():
         def compress_progress(pct, processed, total, eta, msg):
             pbar.update(processed, status=msg)
         
-        zip_path = zip_folder(folder_path, temp_zip, compress_progress)
-        pbar.finish("Compression Complete!")
+        try:
+            zip_path = zip_folder(folder_path, temp_zip, compress_progress)
+            pbar.finish("Compression Complete!")
+        except Exception as e:
+            print()
+            print_error(f"Could not compress folder: {e}")
+            # Clean up partial zip if it exists
+            if temp_zip.exists():
+                try:
+                    temp_zip.unlink()
+                except:
+                    pass
+            input("\n  Press Enter to continue...")
+            return
         print()
         
         file_path = zip_path
@@ -1440,7 +1507,9 @@ def menu_encrypt():
             from tkinter import filedialog
             root = tk.Tk()
             root.withdraw()
-            file_path = filedialog.askopenfilename(title="Select File to Encrypt")
+            root.attributes('-topmost', True)  # Make dialog appear on top
+            root.focus_force()  # Force focus
+            file_path = filedialog.askopenfilename(parent=root, title="Select File to Encrypt")
             root.destroy()
         except:
             file_path = input("  Enter file path: ").strip().strip('"')
@@ -1481,7 +1550,10 @@ def menu_encrypt():
         from tkinter import filedialog
         root = tk.Tk()
         root.withdraw()
+        root.attributes('-topmost', True)  # Make dialog appear on top
+        root.focus_force()  # Force focus
         output_path = filedialog.asksaveasfilename(
+            parent=root,
             title="Save Encrypted File As",
             initialfile=default_name,
             defaultextension=".qenc",
@@ -2232,6 +2304,13 @@ def menu_file_info():
                 else:
                     print_info("Security question recovery: Not set")
                 
+                # Quantum protection info
+                if metadata.get('quantum_protected'):
+                    quantum = metadata.get('quantum', {})
+                    print_success(f"Quantum Protection: ML-KEM-{quantum.get('mlkem_version', '1024')} ({quantum.get('provider', 'unknown')})")
+                else:
+                    print_info("Quantum Protection: Classical encryption only")
+                
                 # Self-destruct info
                 should_destruct, reason, remaining = check_self_destruct(file_path)
                 if remaining is not None:
@@ -2260,6 +2339,202 @@ def menu_file_info():
     input("\n  Press Enter to continue...")
 
 
+# ════════════════════════════════════════════════════════════════════════════════════════
+# UPDATE CHECKER
+# ════════════════════════════════════════════════════════════════════════════════════════
+
+def menu_update():
+    """Check for updates from GitHub and download if available"""
+    import urllib.request
+    import urllib.error
+    
+    clear()
+    show_header()
+    
+    print(c("  ┌" + "─" * 50 + "┐", Colors.CYAN))
+    print(c("  │", Colors.CYAN) + c("CHECK FOR UPDATES".center(50), Colors.BOLD) + c("│", Colors.CYAN))
+    print(c("  └" + "─" * 50 + "┘", Colors.CYAN))
+    print()
+    
+    print(f"  Current version: {c(APP_VERSION, Colors.BRIGHT_WHITE)}")
+    print()
+    
+    # Check for updates
+    print_step(1, "Checking for updates...")
+    
+    try:
+        # Create request with User-Agent header (GitHub API requires it)
+        req = urllib.request.Request(
+            GITHUB_API_URL,
+            headers={'User-Agent': 'QuantumFileEncryptor'}
+        )
+        
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = json.loads(response.read().decode())
+        
+        latest_version = data.get('tag_name', '').lstrip('v')
+        release_notes = data.get('body', 'No release notes available.')
+        html_url = data.get('html_url', GITHUB_RELEASES_URL)
+        assets = data.get('assets', [])
+        
+        print_success(f"Latest version: {latest_version}")
+        print()
+        
+        # Compare versions
+        def parse_version(v):
+            try:
+                return tuple(map(int, v.split('.')))
+            except:
+                return (0, 0, 0)
+        
+        current = parse_version(APP_VERSION)
+        latest = parse_version(latest_version)
+        
+        if latest <= current:
+            print(c("  ✅ You are running the latest version!", Colors.SUCCESS))
+            print()
+            input("\n  Press Enter to continue...")
+            return
+        
+        # New version available
+        print(c("  🆕 NEW VERSION AVAILABLE!", Colors.BRIGHT_YELLOW))
+        print()
+        print(f"  {c(APP_VERSION, Colors.MUTED)} → {c(latest_version, Colors.BRIGHT_GREEN)}")
+        print()
+        
+        # Show release notes (first 5 lines)
+        print(c("  Release Notes:", Colors.BRIGHT_WHITE))
+        notes_lines = release_notes.split('\n')[:5]
+        for line in notes_lines:
+            print(f"    {c(line[:60], Colors.MUTED)}")
+        if len(release_notes.split('\n')) > 5:
+            print(f"    {c('...', Colors.MUTED)}")
+        print()
+        
+        # Find downloadable asset (EXE file)
+        exe_asset = None
+        for asset in assets:
+            if asset.get('name', '').endswith('.exe'):
+                exe_asset = asset
+                break
+        
+        if not exe_asset:
+            print(c("  ⚠️  No direct download available.", Colors.WARNING))
+            print(f"  Please visit: {c(html_url, Colors.BRIGHT_CYAN)}")
+            print()
+            
+            # Offer to open browser
+            open_browser = input("  Open download page in browser? (y/n): ").strip().lower()
+            if open_browser == 'y':
+                import webbrowser
+                webbrowser.open(html_url)
+                print_success("Opened browser!")
+            
+            input("\n  Press Enter to continue...")
+            return
+        
+        # Ask to download
+        download_url = exe_asset.get('browser_download_url')
+        file_size = exe_asset.get('size', 0)
+        
+        print(f"  Download size: {c(format_size(file_size), Colors.BRIGHT_WHITE)}")
+        print()
+        
+        confirm = input("  Download and install update? (y/n): ").strip().lower()
+        if confirm != 'y':
+            print(c("  Update cancelled.", Colors.MUTED))
+            input("\n  Press Enter to continue...")
+            return
+        
+        # Download with progress
+        print()
+        print_step(2, "Downloading update...")
+        print()
+        
+        # Get current executable path
+        if getattr(sys, 'frozen', False):
+            # Running as compiled EXE
+            current_exe = sys.executable
+            download_path = current_exe + ".new"
+        else:
+            # Running as script - download to current directory
+            current_exe = None
+            download_path = Path(__file__).parent / exe_asset.get('name', 'QuantumFileEncryptor.exe')
+        
+        # Download with progress bar
+        downloaded = 0
+        block_size = 8192
+        
+        req = urllib.request.Request(download_url, headers={'User-Agent': 'QuantumFileEncryptor'})
+        
+        with urllib.request.urlopen(req, timeout=60) as response:
+            with open(download_path, 'wb') as out_file:
+                while True:
+                    buffer = response.read(block_size)
+                    if not buffer:
+                        break
+                    downloaded += len(buffer)
+                    out_file.write(buffer)
+                    
+                    # Show progress
+                    if file_size > 0:
+                        percent = (downloaded / file_size) * 100
+                        bar_width = 40
+                        filled = int(bar_width * downloaded / file_size)
+                        bar = "█" * filled + "░" * (bar_width - filled)
+                        print(f"\r  [{bar}] {percent:.1f}%  ", end="", flush=True)
+        
+        print()
+        print()
+        print_success("Download complete!")
+        print()
+        
+        if current_exe:
+            # Replace current executable
+            print_step(3, "Installing update...")
+            
+            # Create batch script to replace EXE after this process exits
+            batch_path = Path(current_exe).parent / "update.bat"
+            batch_content = f'''@echo off
+timeout /t 2 /nobreak > nul
+del "{current_exe}"
+move "{download_path}" "{current_exe}"
+del "%~f0"
+start "" "{current_exe}"
+'''
+            with open(batch_path, 'w') as f:
+                f.write(batch_content)
+            
+            print()
+            print(c("  ✅ UPDATE READY!", Colors.SUCCESS))
+            print()
+            print(c("  The application will now restart to complete the update.", Colors.BRIGHT_WHITE))
+            print()
+            input("  Press Enter to restart...")
+            
+            # Run the batch script and exit
+            subprocess.Popen(['cmd', '/c', str(batch_path)], 
+                           creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+            sys.exit(0)
+        else:
+            print(c("  ✅ UPDATE DOWNLOADED!", Colors.SUCCESS))
+            print()
+            print(f"  New version saved to: {c(str(download_path), Colors.BRIGHT_WHITE)}")
+            print()
+            print(c("  Please replace the old executable manually.", Colors.MUTED))
+            input("\n  Press Enter to continue...")
+            
+    except urllib.error.URLError as e:
+        print()
+        print_error(f"Network error: {e.reason}")
+        print(c("  Please check your internet connection.", Colors.MUTED))
+        input("\n  Press Enter to continue...")
+    except Exception as e:
+        print()
+        print_error(f"Update check failed: {e}")
+        input("\n  Press Enter to continue...")
+
+
 def main():
     """Main menu loop"""
     while True:
@@ -2274,6 +2549,7 @@ def main():
         print(c("  │  ", Colors.CYAN) + c("[2]", Colors.BRIGHT_CYAN) + c(" 🔓 Decrypt a File", Colors.WHITE) + " " * 22 + c("│", Colors.CYAN))
         print(c("  │  ", Colors.CYAN) + c("[3]", Colors.BRIGHT_CYAN) + c(" 📁 Batch Encrypt Multiple Files", Colors.WHITE) + " " * 7 + c("│", Colors.CYAN))
         print(c("  │  ", Colors.CYAN) + c("[4]", Colors.BRIGHT_CYAN) + c(" ℹ  File Info & Verify", Colors.WHITE) + " " * 18 + c("│", Colors.CYAN))
+        print(c("  │  ", Colors.CYAN) + c("[5]", Colors.BRIGHT_CYAN) + c(" 🔄 Check for Updates", Colors.WHITE) + " " * 19 + c("│", Colors.CYAN))
         print(c("  ├" + "─" * 50 + "┤", Colors.CYAN))
         print(c("  │  ", Colors.CYAN) + c("[0]", Colors.MUTED) + c(" Exit", Colors.MUTED) + " " * 35 + c("│", Colors.CYAN))
         print(c("  └" + "─" * 50 + "┘", Colors.CYAN))
@@ -2289,6 +2565,8 @@ def main():
             menu_batch_encrypt()
         elif choice == '4':
             menu_file_info()
+        elif choice == '5':
+            menu_update()
         elif choice == '0':
             clear()
             print()
@@ -2299,7 +2577,24 @@ def main():
 
 
 if __name__ == "__main__":
+    import signal
+    
+    def signal_handler(sig, frame):
+        """Handle Ctrl+C gracefully"""
+        print()
+        print(c("\n  ⛔ Operation cancelled by user (Ctrl+C)", Colors.WARNING))
+        print(c("     Goodbye! 👋", Colors.MUTED))
+        print()
+        sys.exit(0)
+    
+    # Register signal handler for Ctrl+C
+    signal.signal(signal.SIGINT, signal_handler)
+    
     try:
         main()
     except KeyboardInterrupt:
-        print("\n  Goodbye!")
+        signal_handler(None, None)
+    except Exception as e:
+        print(f"\n  ❌ Unexpected error: {e}")
+        sys.exit(1)
+

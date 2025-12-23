@@ -4,6 +4,7 @@
 ║   🔐 QUANTUM FILE ENCRYPTOR - Interactive Console Version                                       ║
 ║                                                                                                  ║
 ║   No GUI dependencies required - works on ANY Python installation!                              ║
+║   Uses Post-Quantum Hybrid Encryption (QuantumSecureVault)                                      ║
 ║                                                                                                  ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
 """
@@ -12,29 +13,38 @@ import sys
 import os
 import json
 import base64
+import secrets
 from pathlib import Path
 from datetime import datetime
 import time
 
-# Add parent directory to import the encryption module
-sys.path.insert(0, str(Path(__file__).parent.parent / "QUANTUM_RESISTANT_ENCRYPTION"))
+# Add local folder and parent directory
+sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(1, str(Path(__file__).parent.parent / "QUANTUM_RESISTANT_ENCRYPTION"))
 
+# Try to import QuantumSecureVault (post-quantum)
 try:
-    from quantum_encryption_infinite import InfiniteQuantumEncryption
+    from secure_vault_quantum import QuantumSecureVault, SecureVault
+    ENCRYPTION_LEVEL = "QUANTUM"
+    QUANTUM_AVAILABLE = True
 except ImportError:
-    print("❌ Error: quantum_encryption_infinite.py not found!")
-    print("   Make sure QUANTUM_RESISTANT_ENCRYPTION folder exists.")
-    input("Press Enter to exit...")
-    sys.exit(1)
+    try:
+        from secure_vault import SecureVault
+        ENCRYPTION_LEVEL = "STANDARD"
+        QUANTUM_AVAILABLE = False
+    except ImportError:
+        print("❌ Error: No encryption module found!")
+        print("   Make sure secure_vault_quantum.py or secure_vault.py exists.")
+        input("Press Enter to exit...")
+        sys.exit(1)
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════
 # CONSTANTS
 # ════════════════════════════════════════════════════════════════════════════════════════
 
-KEYS_DIR = Path(__file__).parent / "keys"
-MAGIC_HEADER = b"QENC"
-VERSION = 1
+MAGIC_HEADER = b"QVLT"  # Quantum VauLT
+VERSION = 2
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════
@@ -52,10 +62,16 @@ def print_header():
     print("╔" + "═" * 78 + "╗")
     print("║" + " " * 78 + "║")
     print("║" + "   🔐 QUANTUM FILE ENCRYPTOR".center(78) + "║")
-    print("║" + "   Infinite-Layer Quantum-Resistant Encryption".center(78) + "║")
+    if QUANTUM_AVAILABLE:
+        print("║" + "   Post-Quantum Hybrid Encryption (ML-KEM-1024 + AES-256-GCM)".center(78) + "║")
+    else:
+        print("║" + "   Industry-Standard Encryption (AES-256-GCM + Argon2id)".center(78) + "║")
     print("║" + " " * 78 + "║")
     print("╠" + "═" * 78 + "╣")
-    print("║" + "   Security: 10,240+ bits  |  Breaking Time: 10^3,082+ years".center(78) + "║")
+    if QUANTUM_AVAILABLE:
+        print("║" + "   NIST Level 5 Security  |  Quantum-Resistant  |  FIPS 203".center(78) + "║")
+    else:
+        print("║" + "   256-bit Security  |  AES-256-GCM  |  Argon2id".center(78) + "║")
     print("╚" + "═" * 78 + "╝")
     print()
 
@@ -65,11 +81,10 @@ def print_menu():
     print("┌" + "─" * 40 + "┐")
     print("│         MAIN MENU                     │")
     print("├" + "─" * 40 + "┤")
-    print("│  [1] 🔑 Generate New Keys             │")
+    print("│  [1] 🔑 Generate Encryption Key       │")
     print("│  [2] 🔒 Encrypt a File                │")
     print("│  [3] 🔓 Decrypt a File                │")
-    print("│  [4] ℹ️  View Key Information          │")
-    print("│  [5] 📂 Open Keys Folder              │")
+    print("│  [4] ℹ️  View Security Information     │")
     print("│  [0] 🚪 Exit                          │")
     print("└" + "─" * 40 + "┘")
     print()
@@ -84,199 +99,100 @@ def format_size(size):
     return f"{size:.1f} TB"
 
 
-def progress_bar(current, total, width=40):
-    """Display a progress bar"""
-    percent = current / total
-    filled = int(width * percent)
-    bar = "█" * filled + "░" * (width - filled)
-    print(f"\r  [{bar}] {percent*100:.0f}%", end="", flush=True)
-
-
 def wait_for_enter():
     """Wait for user to press Enter"""
     print()
     input("  Press Enter to continue...")
 
 
+def get_vault():
+    """Get the appropriate vault instance"""
+    if QUANTUM_AVAILABLE:
+        return QuantumSecureVault()
+    return SecureVault()
+
+
+def generate_password() -> str:
+    """Generate a secure random password"""
+    return base64.b64encode(secrets.token_bytes(32)).decode('ascii')
+
+
 # ════════════════════════════════════════════════════════════════════════════════════════
-# KEY MANAGEMENT
+# KEY GENERATION
 # ════════════════════════════════════════════════════════════════════════════════════════
 
-def has_keys():
-    """Check if keys exist"""
-    return (KEYS_DIR / "public_key.json").exists() and (KEYS_DIR / "private_key.json").exists()
-
-
-def generate_keys():
-    """Generate new encryption keys"""
+def generate_key_menu():
+    """Generate a new encryption key"""
     clear_screen()
     print_header()
     
     print("╔" + "═" * 50 + "╗")
-    print("║     🔑 GENERATE NEW KEYS                        ║")
+    print("║     🔑 GENERATE ENCRYPTION KEY                  ║")
     print("╚" + "═" * 50 + "╝")
     print()
     
-    if has_keys():
-        print("  ⚠️  WARNING: Keys already exist!")
-        print("  Generating new keys will make OLD encrypted files unreadable!")
-        print()
-        confirm = input("  Type 'YES' to confirm: ")
-        if confirm != "YES":
-            print("  ❌ Cancelled.")
-            wait_for_enter()
-            return
-        print()
+    password = generate_password()
     
-    # Get number of layers
-    print("  How many encryption layers? (more = more secure)")
-    print("  • 10 layers = 10,240 bits (recommended)")
-    print("  • 50 layers = 51,200 bits (ultra)")
-    print("  • 100 layers = 102,400 bits (insane)")
+    print("  ✅ KEY GENERATED SUCCESSFULLY!")
     print()
-    
-    try:
-        layers = int(input("  Enter number of layers [10]: ").strip() or "10")
-        if layers < 1:
-            layers = 10
-    except ValueError:
-        layers = 10
-    
+    print("  ╔" + "═" * 60 + "╗")
+    print("  ║  Your Encryption Key:                                     ║")
+    print("  ╠" + "═" * 60 + "╣")
+    print(f"  ║  {password}  ║")
+    print("  ╚" + "═" * 60 + "╝")
     print()
-    print(f"  🔄 Generating {layers}-layer encryption keys...")
-    print(f"     Security: {layers * 1024:,} bits")
+    print("  ⚠️  IMPORTANT: Copy and save this key somewhere safe!")
+    print("     You will need it to decrypt your files.")
     print()
-    
-    KEYS_DIR.mkdir(parents=True, exist_ok=True)
-    
-    crypto = InfiniteQuantumEncryption(num_layers=layers)
-    public_key, private_key = crypto.generate_keypair()
-    
-    # Save public key
-    public_data = {
-        'encryption_pk': base64.b64encode(public_key['encryption_pk']).decode(),
-        'signing_pk': base64.b64encode(public_key['signing_pk']).decode(),
-        'num_layers': public_key['num_layers'],
-        'version': public_key['version'],
-        'created': datetime.now().isoformat(),
-    }
-    
-    with open(KEYS_DIR / "public_key.json", 'w') as f:
-        json.dump(public_data, f, indent=2)
-    
-    # Save private key
-    private_data = {
-        'encryption_sk': base64.b64encode(private_key['encryption_sk']).decode(),
-        'signing_sk': base64.b64decode(private_key['signing_sk']).decode() if isinstance(private_key['signing_sk'], bytes) else private_key['signing_sk'],
-        'num_layers': private_key['num_layers'],
-        'version': private_key['version'],
-        'created': datetime.now().isoformat(),
-    }
-    
-    # Fix: Ensure bytes are properly encoded
-    private_data = {
-        'encryption_sk': base64.b64encode(private_key['encryption_sk']).decode(),
-        'signing_sk': base64.b64encode(private_key['signing_sk']).decode(),
-        'num_layers': private_key['num_layers'],
-        'version': private_key['version'],
-        'created': datetime.now().isoformat(),
-    }
-    
-    with open(KEYS_DIR / "private_key.json", 'w') as f:
-        json.dump(private_data, f, indent=2)
-    
-    print("  ✅ KEYS GENERATED SUCCESSFULLY!")
-    print()
-    print(f"  📂 Location: {KEYS_DIR}")
-    print(f"  🔒 Security: {layers} layers = {layers * 1024:,} bits")
-    print(f"  ⏱️  Breaking time: 10^{int(layers * 1024 * 77 / 256)} years")
-    print()
-    print("  ⚠️  IMPORTANT: Keep your private_key.json SECURE!")
-    print("     Anyone with this file can decrypt your files!")
+    print("     Without this key, your encrypted files CANNOT be recovered!")
     
     wait_for_enter()
 
 
-def load_public_key():
-    """Load public key"""
-    try:
-        with open(KEYS_DIR / "public_key.json", 'r') as f:
-            data = json.load(f)
-        return {
-            'encryption_pk': base64.b64decode(data['encryption_pk']),
-            'signing_pk': base64.b64decode(data['signing_pk']),
-            'num_layers': data['num_layers'],
-            'version': data['version'],
-        }
-    except FileNotFoundError:
-        return None
-
-
-def load_private_key():
-    """Load private key"""
-    try:
-        with open(KEYS_DIR / "private_key.json", 'r') as f:
-            data = json.load(f)
-        return {
-            'encryption_sk': base64.b64decode(data['encryption_sk']),
-            'signing_sk': base64.b64decode(data['signing_sk']),
-            'num_layers': data['num_layers'],
-            'version': data['version'],
-        }
-    except FileNotFoundError:
-        return None
-
-
-def view_key_info():
-    """Display key information"""
+def view_security_info():
+    """Display security information"""
     clear_screen()
     print_header()
     
     print("╔" + "═" * 50 + "╗")
-    print("║     ℹ️  KEY INFORMATION                          ║")
+    print("║     ℹ️  SECURITY INFORMATION                     ║")
     print("╚" + "═" * 50 + "╝")
     print()
     
-    if not has_keys():
-        print("  ❌ No keys found!")
-        print("  👉 Use option [1] to generate keys first.")
-        wait_for_enter()
-        return
-    
-    public_key = load_public_key()
-    
-    layers = public_key['num_layers']
-    bits = layers * 1024
-    breaking_exp = int(bits * 77 / 256)
-    
-    print("  ✅ Keys Found")
-    print()
-    print("  ┌" + "─" * 45 + "┐")
-    print(f"  │  📂 Location: {str(KEYS_DIR)[:30]:30s} │")
-    print(f"  │  🔢 Layers: {layers:<33} │")
-    print(f"  │  🔒 Security: {bits:,} bits{' ' * (26 - len(f'{bits:,}'))} │")
-    print(f"  │  ⏱️  Breaking: 10^{breaking_exp} years{' ' * (22 - len(str(breaking_exp)))} │")
-    print(f"  │  📋 Version: {public_key['version']:<31} │")
-    print("  └" + "─" * 45 + "┘")
+    if QUANTUM_AVAILABLE:
+        print("  ✅ Post-Quantum Encryption ENABLED")
+        print()
+        print("  🔒 Security Features:")
+        print("     • ML-KEM-1024 post-quantum key encapsulation (FIPS 203)")
+        print("     • AES-256-GCM authenticated encryption")
+        print("     • Argon2id memory-hard key derivation")
+        print("     • Hybrid encryption: Classical + Post-Quantum")
+        print("     • NIST Level 5 security (maximum)")
+        print("     • 'Harvest Now, Decrypt Later' attack protection")
+        print()
+        print("  📋 Standards Compliance:")
+        print("     • FIPS 203 (ML-KEM - August 2024)")
+        print("     • FIPS 204 (ML-DSA signatures)")
+        print("     • FIPS 197 (AES)")
+        print("     • NIST SP 800-38D (GCM mode)")
+    else:
+        print("  ⚠️  Standard Encryption Mode")
+        print("  (Install liboqs-python for post-quantum protection)")
+        print()
+        print("  🔒 Security Features:")
+        print("     • AES-256-GCM authenticated encryption")
+        print("     • Argon2id memory-hard key derivation")
+        print("     • 256-bit security level")
+        print("     • Tamper detection (AEAD)")
     
     wait_for_enter()
-
-
-def open_keys_folder():
-    """Open the keys folder in file explorer"""
-    if os.name == 'nt':  # Windows
-        os.startfile(str(KEYS_DIR))
-    elif os.name == 'posix':  # macOS/Linux
-        os.system(f'open "{KEYS_DIR}"' if sys.platform == 'darwin' else f'xdg-open "{KEYS_DIR}"')
-    print("  📂 Opening keys folder...")
-    time.sleep(1)
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════
 # ENCRYPTION
 # ════════════════════════════════════════════════════════════════════════════════════════
 
-def encrypt_file():
+def encrypt_file_menu():
     """Encrypt a file"""
     clear_screen()
     print_header()
@@ -285,14 +201,6 @@ def encrypt_file():
     print("║     🔒 ENCRYPT A FILE                           ║")
     print("╚" + "═" * 50 + "╝")
     print()
-    
-    if not has_keys():
-        print("  ❌ No keys found!")
-        print("  👉 Use option [1] to generate keys first.")
-        wait_for_enter()
-        return
-    
-    public_key = load_public_key()
     
     print("  Enter the full path to the file you want to encrypt:")
     print("  (You can drag and drop the file here)")
@@ -320,11 +228,33 @@ def encrypt_file():
     output_path = file_path.with_suffix(file_path.suffix + ".qenc")
     
     print()
+    print("  Choose password option:")
+    print("  [1] Generate a new secure key (recommended)")
+    print("  [2] Enter your own password")
+    print()
+    
+    choice = input("  Choose [1/2]: ").strip()
+    
+    if choice == '2':
+        password = input("  Enter password: ").strip()
+        if not password:
+            print("  ❌ Password cannot be empty.")
+            wait_for_enter()
+            return
+    else:
+        password = generate_password()
+        print()
+        print("  🔑 Generated Key (SAVE THIS!):")
+        print("  " + "=" * 60)
+        print(f"    {password}")
+        print("  " + "=" * 60)
+    
+    print()
     print("  ┌" + "─" * 60 + "┐")
     print(f"  │  📄 Input:  {file_path.name[:45]:45s} │")
     print(f"  │  📦 Output: {output_path.name[:45]:45s} │")
     print(f"  │  📊 Size:   {format_size(file_path.stat().st_size):45s} │")
-    print(f"  │  🔢 Layers: {public_key['num_layers']:<45} │")
+    print(f"  │  🔒 Mode:   {'Quantum-Resistant' if QUANTUM_AVAILABLE else 'Standard AES-256':45s} │")
     print("  └" + "─" * 60 + "┘")
     print()
     
@@ -337,6 +267,8 @@ def encrypt_file():
     print()
     print("  🔄 Encrypting file...")
     
+    vault = get_vault()
+    
     # Read file
     print("  📖 Reading file...", end="", flush=True)
     with open(file_path, 'rb') as f:
@@ -348,14 +280,14 @@ def encrypt_file():
         'original_name': file_path.name,
         'original_size': len(plaintext),
         'encrypted_at': datetime.now().isoformat(),
+        'encryption_level': ENCRYPTION_LEVEL,
     }
     metadata_bytes = json.dumps(metadata).encode()
     combined = len(metadata_bytes).to_bytes(4, 'big') + metadata_bytes + plaintext
     
     # Encrypt
     print("  🔐 Applying quantum-resistant encryption...", end="", flush=True)
-    crypto = InfiniteQuantumEncryption(num_layers=public_key['num_layers'])
-    encrypted = crypto.encrypt(combined, public_key)
+    encrypted_data = vault.encrypt(combined, password)
     print(" ✓")
     
     # Write encrypted file
@@ -363,15 +295,8 @@ def encrypt_file():
     with open(output_path, 'wb') as f:
         f.write(MAGIC_HEADER)
         f.write(VERSION.to_bytes(2, 'big'))
-        f.write(encrypted['num_layers'].to_bytes(4, 'big'))
-        
-        ephemeral = encrypted['ephemeral_key']
-        f.write(len(ephemeral).to_bytes(4, 'big'))
-        f.write(ephemeral)
-        
-        enc_data = encrypted['encrypted_data']
-        f.write(len(enc_data).to_bytes(8, 'big'))
-        f.write(enc_data)
+        f.write(len(encrypted_data).to_bytes(8, 'big'))
+        f.write(encrypted_data)
     print(" ✓")
     
     print()
@@ -383,7 +308,7 @@ def encrypt_file():
     print(f"  📊 Original size: {format_size(len(plaintext))}")
     print(f"  📊 Encrypted size: {format_size(output_path.stat().st_size)}")
     print()
-    print("  🔒 Your file is now protected with quantum-resistant encryption!")
+    print("  ⚠️  Remember to save your encryption key!")
     
     wait_for_enter()
 
@@ -392,7 +317,7 @@ def encrypt_file():
 # DECRYPTION
 # ════════════════════════════════════════════════════════════════════════════════════════
 
-def decrypt_file():
+def decrypt_file_menu():
     """Decrypt a file"""
     clear_screen()
     print_header()
@@ -401,14 +326,6 @@ def decrypt_file():
     print("║     🔓 DECRYPT A FILE                           ║")
     print("╚" + "═" * 50 + "╝")
     print()
-    
-    if not has_keys():
-        print("  ❌ No keys found!")
-        print("  👉 You need the private key that was used to encrypt the file.")
-        wait_for_enter()
-        return
-    
-    private_key = load_private_key()
     
     print("  Enter the full path to the encrypted file (.qenc):")
     print("  (You can drag and drop the file here)")
@@ -437,7 +354,17 @@ def decrypt_file():
             return
     
     print()
+    password = input("  Enter decryption key/password: ").strip()
+    
+    if not password:
+        print("  ❌ Password is required!")
+        wait_for_enter()
+        return
+    
+    print()
     print("  🔄 Decrypting file...")
+    
+    vault = get_vault()
     
     # Read encrypted file
     print("  📖 Reading encrypted file...", end="", flush=True)
@@ -446,16 +373,11 @@ def decrypt_file():
             magic = f.read(4)
             if magic != MAGIC_HEADER:
                 print()
-                print("  ❌ Not a valid QENC encrypted file!")
+                print("  ❌ Not a valid QVLT encrypted file!")
                 wait_for_enter()
                 return
             
             version = int.from_bytes(f.read(2), 'big')
-            num_layers = int.from_bytes(f.read(4), 'big')
-            
-            ephemeral_len = int.from_bytes(f.read(4), 'big')
-            ephemeral_key = f.read(ephemeral_len)
-            
             enc_len = int.from_bytes(f.read(8), 'big')
             encrypted_data = f.read(enc_len)
         print(" ✓")
@@ -465,23 +387,19 @@ def decrypt_file():
         wait_for_enter()
         return
     
-    encrypted = {
-        'ephemeral_key': ephemeral_key,
-        'encrypted_data': encrypted_data,
-        'num_layers': num_layers,
-        'version': "3.0.0-INFINITE",
-    }
-    
     # Decrypt
-    print(f"  🔐 Decrypting {num_layers} layers...", end="", flush=True)
+    print("  🔐 Decrypting...", end="", flush=True)
     try:
-        crypto = InfiniteQuantumEncryption(num_layers=num_layers)
-        decrypted = crypto.decrypt(encrypted, private_key)
+        decrypted = vault.decrypt(encrypted_data, password)
         print(" ✓")
+    except ValueError:
+        print()
+        print("  ❌ Wrong password! The password you entered is incorrect.")
+        wait_for_enter()
+        return
     except Exception as e:
         print()
         print(f"  ❌ Decryption failed: {e}")
-        print("  This may mean the file was encrypted with different keys.")
         wait_for_enter()
         return
     
@@ -522,35 +440,23 @@ def main():
     while True:
         clear_screen()
         print_header()
-        
-        # Show key status
-        if has_keys():
-            pk = load_public_key()
-            print(f"  🔑 Keys: ✅ Loaded ({pk['num_layers']} layers = {pk['num_layers'] * 1024:,} bits)")
-        else:
-            print("  🔑 Keys: ⚠️  Not found - Generate keys first!")
-        print()
-        
         print_menu()
         
-        choice = input("  Enter your choice [0-5]: ").strip()
+        choice = input("  Enter your choice [0-4]: ").strip()
         
         if choice == '1':
-            generate_keys()
+            generate_key_menu()
         elif choice == '2':
-            encrypt_file()
+            encrypt_file_menu()
         elif choice == '3':
-            decrypt_file()
+            decrypt_file_menu()
         elif choice == '4':
-            view_key_info()
-        elif choice == '5':
-            KEYS_DIR.mkdir(parents=True, exist_ok=True)
-            open_keys_folder()
+            view_security_info()
         elif choice == '0':
             clear_screen()
             print()
             print("  👋 Thank you for using Quantum File Encryptor!")
-            print("  🔒 Your files are protected with infinite-layer encryption.")
+            print("  🔒 Your files are protected with quantum-resistant encryption.")
             print()
             break
         else:
