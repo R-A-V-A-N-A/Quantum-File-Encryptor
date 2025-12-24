@@ -388,7 +388,7 @@ class GPUAccelerator:
                     info['memory'] = device.global_mem_size
                     info['backend'] = 'OpenCL'
                     return info
-        except:
+        except (ImportError, RuntimeError, OSError) as e:
             pass
         
         try:
@@ -399,7 +399,7 @@ class GPUAccelerator:
             info['memory'] = device.total_memory()
             info['backend'] = 'CUDA'
             return info
-        except:
+        except (ImportError, RuntimeError, OSError, AttributeError) as e:
             pass
         
         return info

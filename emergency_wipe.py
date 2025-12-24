@@ -111,7 +111,7 @@ class SecureShredder:
             # Best effort: try normal delete
             try:
                 file_path.unlink()
-            except:
+            except (OSError, PermissionError, IOError) as e:
                 pass
             return False
     
@@ -139,13 +139,13 @@ class SecureShredder:
             if dir_entry.is_dir():
                 try:
                     dir_entry.rmdir()
-                except:
+                except (OSError, PermissionError) as e:
                     pass
         
         # Remove root directory
         try:
             dir_path.rmdir()
-        except:
+        except (OSError, PermissionError, IOError) as e:
             pass
         
         return count
@@ -344,7 +344,7 @@ class DeadMansSwitch:
         try:
             import ctypes
             ctypes.windll.kernel32.SetFileAttributesW(str(self.config_dir), 0x02)
-        except:
+        except (OSError, PermissionError, IOError) as e:
             pass
     
     def _load_config(self) -> dict:

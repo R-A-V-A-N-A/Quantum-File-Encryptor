@@ -20,7 +20,7 @@ SECURITY FEATURES:
 # ============================================================================
 # VERSION AND UPDATE CONFIGURATION
 # ============================================================================
-APP_VERSION = "2.2.1"
+APP_VERSION = "2.3.0"
 GITHUB_REPO = "R-A-V-A-N-A/Quantum-File-Encryptor"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
@@ -247,6 +247,21 @@ VERSION = 6
 STREAM_MAGIC = b"SVLS"
 
 # ============================================================================
+# SECURITY CONSTANTS (Avoid magic numbers)
+# ============================================================================
+SALT_SIZE = 16
+NONCE_SIZE = 12
+KEY_DERIVATION_TIME_COST = 3
+KEY_DERIVATION_MEMORY_COST = 65536
+KEY_DERIVATION_PARALLELISM = 4
+DERIVED_KEY_LENGTH = 32
+MASTER_KEY_SIZE = 128
+MAX_FAILED_ATTEMPTS = 3
+BASE_LOCKOUT_HOURS = 24
+MAX_SECURITY_QUESTION_LENGTH = 500
+MAX_SECURITY_ANSWER_LENGTH = 200
+
+# ============================================================================
 # MEMORY AND CHUNK CONFIGURATION
 # ============================================================================
 
@@ -304,7 +319,7 @@ def key_to_bytes(key_string: str) -> bytes:
     """Convert base64 key string back to bytes"""
     try:
         return base64.b64decode(key_string.encode('ascii'))
-    except:
+    except (ValueError, UnicodeEncodeError, Exception):
         return None
 
 
@@ -374,7 +389,7 @@ def get_lockout_status(encrypted_file: Path) -> dict:
             'failed_attempts': data.get('failed_attempts', 0),
             'lockout_level': data.get('lockout_level', 0)
         }
-    except:
+    except (json.JSONDecodeError, KeyError, ValueError, OSError) as e:
         return {
             'locked': False,
             'unlock_time': None,
@@ -418,11 +433,12 @@ def record_failed_attempt(encrypted_file: Path):
         json.dump(data, f, indent=2)
     
     # Make the lock file hidden on Windows
-    try:
-        import ctypes
-        ctypes.windll.kernel32.SetFileAttributesW(str(lock_file), 0x02)  # FILE_ATTRIBUTE_HIDDEN
-    except:
-        pass  # Ignore on non-Windows systems
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetFileAttributesW(str(lock_file), 0x02)  # FILE_ATTRIBUTE_HIDDEN
+        except (AttributeError, OSError):
+            pass  # Ignore on non-Windows systems or if it fails
     
     return failed_attempts, lockout_level
 
@@ -652,7 +668,7 @@ def parse_share(share_string: str) -> tuple:
         total = int(parts[2])
         share_bytes = base64.b64decode(parts[3])
         return index, share_bytes, total, threshold
-    except:
+    except (ValueError, IndexError, base64.binascii.Error) as e:
         return None
 
 
@@ -697,7 +713,7 @@ def check_self_destruct(encrypted_file: Path) -> tuple:
         remaining = max_uses - current_uses if max_uses else None
         return False, None, remaining
         
-    except:
+    except (json.JSONDecodeError, KeyError, ValueError, OSError) as e:
         return False, None, None
 
 
@@ -723,12 +739,13 @@ def increment_destruct_counter(encrypted_file: Path) -> tuple:
         with open(destruct_file, 'w') as f:
             json.dump(data, f)
         
-        # Make hidden
-        try:
-            import ctypes
-            ctypes.windll.kernel32.SetFileAttributesW(str(destruct_file), 0x02)
-        except:
-            pass
+        # Make hidden on Windows
+        if sys.platform == 'win32':
+            try:
+                import ctypes
+                ctypes.windll.kernel32.SetFileAttributesW(str(destruct_file), 0x02)
+            except (AttributeError, OSError):
+                pass
         
         # Check if this was the last use
         max_uses = data.get('max_uses')
@@ -738,7 +755,7 @@ def increment_destruct_counter(encrypted_file: Path) -> tuple:
         remaining = max_uses - data['current_uses'] if max_uses else None
         return False, remaining
         
-    except:
+    except (json.JSONDecodeError, KeyError, ValueError, OSError) as e:
         return False, None
 
 
@@ -758,11 +775,12 @@ def create_destruct_tracker(encrypted_file: Path, max_uses: int = None,
         json.dump(data, f)
     
     # Make hidden on Windows
-    try:
-        import ctypes
-        ctypes.windll.kernel32.SetFileAttributesW(str(destruct_file), 0x02)
-    except:
-        pass
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetFileAttributesW(str(destruct_file), 0x02)
+        except (AttributeError, OSError):
+            pass
 
 
 def destroy_encrypted_file(encrypted_file: Path):
@@ -855,7 +873,7 @@ def zip_folder(folder_path: Path, output_zip: Path = None, progress_callback=Non
         if output_zip.exists():
             try:
                 output_zip.unlink()
-            except:
+            except OSError:
                 pass
         raise
 
@@ -938,7 +956,7 @@ def read_file_metadata(file_path: Path) -> dict:
             meta_bytes = infile.read(meta_len)
             
             return json.loads(meta_bytes.decode())
-    except:
+    except (IOError, OSError, json.JSONDecodeError, struct.error) as e:
         return None
 
 
@@ -969,16 +987,16 @@ def encrypt_file_with_key(file_path: Path, key_bytes: bytes, output_path: Path =
         progress_callback(0, 0, file_size, 0, "Initializing encryption...")
     
     # Generate salt for key derivation
-    salt = secrets.token_bytes(16)
+    salt = secrets.token_bytes(SALT_SIZE)
     
     # Derive encryption key using Argon2id (fast and reliable for large files)
     derived_key = hash_secret_raw(
         secret=key_bytes,
         salt=salt,
-        time_cost=3,
-        memory_cost=65536,
-        parallelism=4,
-        hash_len=32,
+        time_cost=KEY_DERIVATION_TIME_COST,
+        memory_cost=KEY_DERIVATION_MEMORY_COST,
+        parallelism=KEY_DERIVATION_PARALLELISM,
+        hash_len=DERIVED_KEY_LENGTH,
         type=Type.ID
     )
     algorithm = 'ChaCha20-Poly1305-Stream'
@@ -989,14 +1007,14 @@ def encrypt_file_with_key(file_path: Path, key_bytes: bytes, output_path: Path =
     recovery_data = None
     if security_question and security_answer:
         # Derive a recovery key from the security answer
-        recovery_salt = secrets.token_bytes(16)
+        recovery_salt = secrets.token_bytes(SALT_SIZE)
         answer_key = hash_secret_raw(
             secret=security_answer.lower().strip().encode('utf-8'),
             salt=recovery_salt,
-            time_cost=3,
-            memory_cost=65536,
-            parallelism=4,
-            hash_len=32,
+            time_cost=KEY_DERIVATION_TIME_COST,
+            memory_cost=KEY_DERIVATION_MEMORY_COST,
+            parallelism=KEY_DERIVATION_PARALLELISM,
+            hash_len=DERIVED_KEY_LENGTH,
             type=Type.ID
         )
         
@@ -1088,6 +1106,17 @@ def encrypt_file_with_key(file_path: Path, key_bytes: bytes, output_path: Path =
             progress_callback(100, file_size, file_size, 0, 
                              f"Done! {format_size(file_size)} in {format_time(elapsed)}")
         
+        # Verify the encrypted file is valid
+        try:
+            with open(output_path, 'rb') as verify_file:
+                verify_magic = verify_file.read(4)
+                if verify_magic != STREAM_MAGIC:
+                    raise ValueError("Invalid file magic after encryption")
+        except Exception as verify_err:
+            if output_path and Path(output_path).exists():
+                Path(output_path).unlink()
+            return False, f"Verification failed: {verify_err}"
+        
         return True, str(output_path)
         
     except MemoryError:
@@ -1095,7 +1124,7 @@ def encrypt_file_with_key(file_path: Path, key_bytes: bytes, output_path: Path =
         if output_path and Path(output_path).exists():
             try:
                 Path(output_path).unlink()
-            except:
+            except (OSError, PermissionError):
                 pass
         return False, "Out of memory! Try closing other applications or encrypting a smaller file."
     except PermissionError as e:
@@ -1107,7 +1136,7 @@ def encrypt_file_with_key(file_path: Path, key_bytes: bytes, output_path: Path =
         if output_path and Path(output_path).exists():
             try:
                 Path(output_path).unlink()
-            except:
+            except (OSError, PermissionError):
                 pass
         return False, f"Encryption failed: {str(e)}"
 
@@ -1154,10 +1183,10 @@ def recover_key_from_answer(file_path: Path, security_answer: str) -> tuple:
         answer_key = hash_secret_raw(
             secret=security_answer.lower().strip().encode('utf-8'),
             salt=recovery_salt,
-            time_cost=3,
-            memory_cost=65536,
-            parallelism=4,
-            hash_len=32,
+            time_cost=KEY_DERIVATION_TIME_COST,
+            memory_cost=KEY_DERIVATION_MEMORY_COST,
+            parallelism=KEY_DERIVATION_PARALLELISM,
+            hash_len=DERIVED_KEY_LENGTH,
             type=Type.ID
         )
         
@@ -1198,7 +1227,7 @@ def get_security_question(file_path: Path) -> tuple:
                 return True, metadata['recovery']['question']
             
             return False, None
-    except:
+    except (IOError, OSError, json.JSONDecodeError, struct.error) as e:
         return False, None
 
 
@@ -1232,7 +1261,7 @@ def decrypt_file_with_key(file_path: Path, key_bytes: bytes, output_path: Path =
             total_chunks = struct.unpack('>Q', infile.read(8))[0]
             meta_len = struct.unpack('>I', infile.read(4))[0]  # 4 bytes for larger metadata
             meta_bytes = infile.read(meta_len)
-            salt = infile.read(16)
+            salt = infile.read(SALT_SIZE)
             
             metadata = json.loads(meta_bytes.decode())
             original_name = metadata.get('name', 'decrypted_file')
@@ -1241,10 +1270,10 @@ def decrypt_file_with_key(file_path: Path, key_bytes: bytes, output_path: Path =
             derived_key = hash_secret_raw(
                 secret=key_bytes,
                 salt=salt,
-                time_cost=3,
-                memory_cost=65536,
-                parallelism=4,
-                hash_len=32,
+                time_cost=KEY_DERIVATION_TIME_COST,
+                memory_cost=KEY_DERIVATION_MEMORY_COST,
+                parallelism=KEY_DERIVATION_PARALLELISM,
+                hash_len=DERIVED_KEY_LENGTH,
                 type=Type.ID
             )
             
@@ -1360,14 +1389,20 @@ def decrypt_file_with_key(file_path: Path, key_bytes: bytes, output_path: Path =
 # WINDOWS FILE DIALOG
 # ════════════════════════════════════════════════════════════════════════════════
 
+def _escape_powershell_string(s: str) -> str:
+    """Escape a string for safe use in PowerShell"""
+    # Replace backticks and single quotes to prevent injection
+    return s.replace('`', '``').replace("'", "''").replace('"', '`"')
+
 def open_file_dialog(title="Select File"):
     """Open native Windows file dialog"""
     try:
-        ps_script = '''
+        safe_title = _escape_powershell_string(title)
+        ps_script = f'''
         [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
         Add-Type -AssemblyName System.Windows.Forms
         $dialog = New-Object System.Windows.Forms.OpenFileDialog
-        $dialog.Title = "''' + title + '''"
+        $dialog.Title = '{safe_title}'
         $dialog.Filter = "All Files (*.*)|*.*|Encrypted Files (*.qenc)|*.qenc"
         $dialog.ShowDialog() | Out-Null
         [Console]::WriteLine($dialog.FileName)
@@ -1379,22 +1414,23 @@ def open_file_dialog(title="Select File"):
         if path and os.path.exists(path):
             return path
         return None
-    except:
+    except (subprocess.SubprocessError, OSError):
         return None
 
 
 def save_file_dialog(title="Save File As", default_name="encrypted.qenc"):
     """Open native Windows save file dialog"""
     try:
-        # Sanitize default name for PowerShell
-        safe_name = default_name.replace("'", "").replace('"', '')
-        ps_script = '''
+        # Escape strings for PowerShell safety
+        safe_title = _escape_powershell_string(title)
+        safe_name = _escape_powershell_string(default_name)
+        ps_script = f'''
         [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
         Add-Type -AssemblyName System.Windows.Forms
         $dialog = New-Object System.Windows.Forms.SaveFileDialog
-        $dialog.Title = "''' + title + '''"
+        $dialog.Title = '{safe_title}'
         $dialog.Filter = "Encrypted Files (*.qenc)|*.qenc|All Files (*.*)|*.*"
-        $dialog.FileName = "''' + safe_name + '''"
+        $dialog.FileName = '{safe_name}'
         $dialog.ShowDialog() | Out-Null
         [Console]::WriteLine($dialog.FileName)
         '''
@@ -1402,7 +1438,7 @@ def save_file_dialog(title="Save File As", default_name="encrypted.qenc"):
                                capture_output=True, text=True, encoding='utf-8')
         path = result.stdout.strip()
         return path if path else None
-    except:
+    except (subprocess.SubprocessError, OSError):
         return None
 
 
@@ -1411,7 +1447,7 @@ def copy_to_clipboard(text):
     try:
         subprocess.run(['clip'], input=text.encode('utf-8'), check=True)
         return True
-    except:
+    except (subprocess.SubprocessError, OSError, FileNotFoundError):
         return False
 
 
@@ -1535,16 +1571,16 @@ def encrypt_folder_stream(folder_path: Path, key_bytes: bytes, output_path: Path
     total_size = sum(f.stat().st_size for f in files_only)
     
     chunk_size = get_optimal_chunk_size()
-    salt = secrets.token_bytes(16)
+    salt = secrets.token_bytes(SALT_SIZE)
     
     # Derive key
     derived_key = hash_secret_raw(
         secret=key_bytes,
         salt=salt,
-        time_cost=3,
-        memory_cost=65536,
-        parallelism=4,
-        hash_len=32,
+        time_cost=KEY_DERIVATION_TIME_COST,
+        memory_cost=KEY_DERIVATION_MEMORY_COST,
+        parallelism=KEY_DERIVATION_PARALLELISM,
+        hash_len=DERIVED_KEY_LENGTH,
         type=Type.ID
     )
     
@@ -1605,7 +1641,7 @@ def encrypt_folder_stream(folder_path: Path, key_bytes: bytes, output_path: Path
                     if delete_source:
                         try:
                             file_path.unlink() # Delete file immediately (Space Saver)
-                        except:
+                        except (OSError, PermissionError):
                             pass
                             
             enc_writer.close()
@@ -1625,7 +1661,7 @@ def encrypt_folder_stream(folder_path: Path, key_bytes: bytes, output_path: Path
         if delete_source:
              try:
                  shutil.rmtree(folder_path)
-             except:
+             except (OSError, PermissionError):
                  pass
                  
         return True, str(output_path)
@@ -1664,6 +1700,7 @@ def menu_encrypt():
     file_path = None
     is_folder = False
     temp_zip = None
+    delete_source = False  # Initialize here for proper scoping
     
     if input_type == '2':
         # Folder selection
@@ -1677,7 +1714,7 @@ def menu_encrypt():
             root.withdraw()
             folder_path = filedialog.askdirectory(title="Select Folder to Encrypt")
             root.destroy()
-        except:
+        except (ImportError, RuntimeError, tk.TclError) as e:
             folder_path = input("  Enter folder path: ").strip().strip('"')
         
         if not folder_path:
@@ -1800,12 +1837,16 @@ def menu_encrypt():
         print(f"  File: {c(file_path.name, Colors.BRIGHT_WHITE)}")
         print(f"  Size: {c(format_size(file_size), Colors.BRIGHT_WHITE)}")
     
+    # For single files, calculate chunk info; for folders, use total_size
+    if is_folder:
+        file_size = total_size  # Use total_size calculated earlier for folders
+    
     chunk_size = get_optimal_chunk_size()
     total_chunks = (file_size + chunk_size - 1) // chunk_size
     print(f"  Chunks: {total_chunks} x {format_size(chunk_size)} (using 70% RAM)")
     print()
     
-    # Step 2: Save location
+    # Step 2/3: Save location (step number depends on whether folder mode was selected)
     print_step(2, "Choose where to save encrypted file...")
     default_name = file_path.name + ".qenc"
     
@@ -1825,7 +1866,7 @@ def menu_encrypt():
             filetypes=[("Encrypted Files", "*.qenc")]
         )
         root.destroy()
-    except:
+    except (ImportError, RuntimeError, Exception) as e:
         output_path = input(f"  Output path [{default_name}]: ").strip().strip('"')
         if not output_path:
             output_path = str(file_path.parent / default_name)
@@ -1900,9 +1941,18 @@ def menu_encrypt():
             print("  Enter a question only YOU can answer:")
             security_question = input("  Question: ").strip()
             if security_question:
+                # Validate question length
+                if len(security_question) > MAX_SECURITY_QUESTION_LENGTH:
+                    print_warning(f"Question too long (max {MAX_SECURITY_QUESTION_LENGTH} chars). Truncating.")
+                    security_question = security_question[:MAX_SECURITY_QUESTION_LENGTH]
+                
                 print("  Enter the answer (case-insensitive):")
                 security_answer = input("  Answer: ").strip()
                 if security_answer:
+                    # Validate answer length
+                    if len(security_answer) > MAX_SECURITY_ANSWER_LENGTH:
+                        print_warning(f"Answer too long (max {MAX_SECURITY_ANSWER_LENGTH} chars). Truncating.")
+                        security_answer = security_answer[:MAX_SECURITY_ANSWER_LENGTH]
                     print_success("Security question set!")
                 else:
                     security_question = None
@@ -1928,7 +1978,7 @@ def menu_encrypt():
                 try:
                     max_uses = int(input("  Max decryptions: ").strip())
                     print_success(f"Self-destruct after {max_uses} decryptions.")
-                except:
+                except ValueError:
                     print_warning("Invalid number. Disabled.")
             
             if destruct_type in ['2', '3']:
@@ -1940,7 +1990,7 @@ def menu_encrypt():
                         expire_date = None
                     else:
                         print_success(f"Expires on {expire_date.strftime('%Y-%m-%d')}.")
-                except:
+                except ValueError:
                     print_warning("Invalid date. Disabled.")
         print()
 
@@ -1957,7 +2007,7 @@ def menu_encrypt():
         # Note: encrypt_folder_stream handles its own progress bar
         success, result = encrypt_folder_stream(
             file_path, key_bytes, output_path, 
-            delete_source=locals().get('delete_source', False)
+            delete_source=delete_source
         )
     else:
         # Standard Single File Encryption
@@ -1980,7 +2030,7 @@ def menu_encrypt():
     if temp_zip and temp_zip.exists():
         try:
             temp_zip.unlink()
-        except:
+        except (OSError, PermissionError):
             pass
     
     if success:
@@ -2091,7 +2141,7 @@ def menu_decrypt():
             filetypes=[("Encrypted Files", "*.qenc"), ("All Files", "*.*")]
         )
         root.destroy()
-    except:
+    except (ImportError, RuntimeError, Exception) as e:
         file_path = input("  Enter file path: ").strip().strip('"')
     
     if not file_path:
@@ -2319,7 +2369,7 @@ def menu_decrypt():
             initialfile=default_name
         )
         root.destroy()
-    except:
+    except (ImportError, RuntimeError, Exception) as e:
         output_path = input(f"  Output path [{default_name}]: ").strip().strip('"')
         if not output_path:
             output_path = str(file_path.parent / default_name)
@@ -2378,7 +2428,7 @@ def menu_decrypt():
                 # Delete the temporary archive file
                 try:
                     decrypted_path.unlink()
-                except:
+                except (OSError, PermissionError):
                     pass
                     
                 final_result = str(extracted_folder)
@@ -2451,7 +2501,7 @@ def menu_batch_encrypt():
         root.withdraw()
         file_paths = filedialog.askopenfilenames(title="Select Files to Encrypt")
         root.destroy()
-    except:
+    except (ImportError, RuntimeError, Exception) as e:
         print_error("File dialog not available.")
         input("\n  Press Enter to continue...")
         return
@@ -2572,9 +2622,11 @@ def menu_file_info():
                 version = struct.unpack('>H', f.read(2))[0]
                 file_size = struct.unpack('>Q', f.read(8))[0]
                 chunk_size = struct.unpack('>Q', f.read(8))[0]
-                f.read(16)  # salt
+                total_chunks = struct.unpack('>Q', f.read(8))[0]
                 meta_len = struct.unpack('>I', f.read(4))[0]
                 meta_bytes = f.read(meta_len)
+                # salt is read AFTER metadata (16 bytes)
+                _salt = f.read(SALT_SIZE)
                 metadata = json.loads(meta_bytes.decode())
                 
                 print(c("  ENCRYPTION INFO", Colors.HEADER))
@@ -2674,7 +2726,7 @@ def menu_update():
         def parse_version(v):
             try:
                 return tuple(map(int, v.split('.')))
-            except:
+            except (ValueError, AttributeError):
                 return (0, 0, 0)
         
         current = parse_version(APP_VERSION)

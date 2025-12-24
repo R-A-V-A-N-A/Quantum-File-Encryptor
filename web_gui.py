@@ -148,6 +148,12 @@ class EncryptorHandler(SimpleHTTPRequestHandler):
         if self.path == '/api/encrypt':
             data = json.loads(post_data)
             file_path = data.get('path')
+            
+            # Validate file path - must exist and be a file
+            if not file_path or not Path(file_path).exists() or not Path(file_path).is_file():
+                self.send_json({'success': False, 'result': 'Invalid file path'})
+                return
+            
             password = data.get('password')
             if not password:
                 password = generate_password()
@@ -157,7 +163,17 @@ class EncryptorHandler(SimpleHTTPRequestHandler):
         elif self.path == '/api/decrypt':
             data = json.loads(post_data)
             file_path = data.get('path')
+            
+            # Validate file path - must exist, be a file, and have .qenc extension
+            if not file_path or not Path(file_path).exists() or not Path(file_path).is_file():
+                self.send_json({'success': False, 'result': 'Invalid file path'})
+                return
+            
             password = data.get('password')
+            if not password:
+                self.send_json({'success': False, 'result': 'Password required'})
+                return
+            
             success, result = decrypt_file(file_path, password)
             self.send_json({'success': success, 'result': result})
     

@@ -154,8 +154,8 @@ def encrypt_file(file_path, options):
                 max_uses = int(options.get('destructCount', 0))
                 if max_uses > 0:
                     create_destruct_tracker(output_path, max_uses=max_uses)
-            except:
-                pass
+            except (ValueError, OSError, IOError) as e:
+                pass  # Non-critical, continue without destruct tracker
         
         # Handle split key
         key_display = key_string
@@ -299,7 +299,7 @@ def get_file_security_question(file_path):
     try:
         has_q, question = get_security_question(Path(file_path))
         return {'hasQuestion': has_q, 'question': question}
-    except:
+    except (OSError, IOError, ValueError) as e:
         return {'hasQuestion': False, 'question': None}
 
 
@@ -319,10 +319,10 @@ def main():
     # Start Eel with Chrome/Edge
     try:
         eel.start('index.html', size=(1200, 900), mode='chrome')
-    except:
+    except (SystemExit, EnvironmentError, OSError):
         try:
             eel.start('index.html', size=(1200, 900), mode='edge')
-        except:
+        except (SystemExit, EnvironmentError, OSError):
             # Fallback to default browser
             eel.start('index.html', size=(1200, 900))
 

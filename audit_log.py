@@ -91,7 +91,7 @@ class AuditLogger:
         try:
             import ctypes
             ctypes.windll.kernel32.SetFileAttributesW(str(self.log_dir), 0x02)
-        except:
+        except (IOError, OSError, json.JSONDecodeError) as e:
             pass
         
         # Load or generate log key
@@ -119,7 +119,7 @@ class AuditLogger:
         try:
             import ctypes
             ctypes.windll.kernel32.SetFileAttributesW(str(self.key_file), 0x02)
-        except:
+        except (IOError, OSError, ValueError) as e:
             pass
         
         return key
@@ -237,7 +237,7 @@ class AuditLogger:
                     length = struct.unpack('>I', length_data)[0]
                     f.seek(length, 1)  # Skip entry
                     count += 1
-        except:
+        except (IOError, OSError, struct.error) as e:
             pass
         
         return count

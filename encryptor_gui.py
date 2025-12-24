@@ -560,7 +560,7 @@ class QuantumEncryptorGUI(ctk.CTk):
                         
                         self.key_textbox.delete("1.0", "end")
                         self.key_textbox.insert("1.0", key_text)
-                    except:
+                    except (ValueError, IOError, OSError) as e:
                         self.key_textbox.delete("1.0", "end")
                         self.key_textbox.insert("1.0", key_string)
                 else:
@@ -572,7 +572,7 @@ class QuantumEncryptorGUI(ctk.CTk):
                     try:
                         max_uses = int(self.destruct_count_entry.get())
                         create_destruct_tracker(output_path, max_uses=max_uses)
-                    except:
+                    except (ValueError, IOError, OSError) as e:
                         pass
                 
                 # Shred original

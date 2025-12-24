@@ -269,10 +269,10 @@ class MLDSA87:
             # Use liboqs for FIPS 204 compliant ML-DSA
             try:
                 self.sig = oqs.Signature("Dilithium5")
-            except:
+            except (KeyError, ValueError, RuntimeError):
                 try:
                     self.sig = oqs.Signature("ML-DSA-87")
-                except:
+                except (KeyError, ValueError, RuntimeError):
                     self.provider = "simulated"
                     self.sig = None
         else:
@@ -348,7 +348,7 @@ class MLDSA87:
             try:
                 sig = oqs.Signature("Dilithium5")
                 return sig.verify(message, signature, self.public_key)
-            except:
+            except (KeyError, ValueError, RuntimeError, Exception):
                 return False
         
         else:
