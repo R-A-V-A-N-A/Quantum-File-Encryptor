@@ -2,7 +2,7 @@
 ; Creates a professional Windows installer
 
 #define MyAppName "Quantum File Encryptor"
-#define MyAppVersion "2.3.0"
+#define MyAppVersion "2.3.1"
 #define MyAppPublisher "Quantum Security"
 #define MyAppExeName "QuantumFileEncryptor.exe"
 

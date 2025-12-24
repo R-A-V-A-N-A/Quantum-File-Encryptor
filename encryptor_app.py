@@ -20,7 +20,7 @@ SECURITY FEATURES:
 # ============================================================================
 # VERSION AND UPDATE CONFIGURATION
 # ============================================================================
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.3.1"
 GITHUB_REPO = "R-A-V-A-N-A/Quantum-File-Encryptor"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
@@ -2890,11 +2890,10 @@ def main():
         print(c("  ┌" + "─" * 50 + "┐", Colors.CYAN))
         print(c("  │", Colors.CYAN) + c("MAIN MENU".center(50), Colors.BOLD + Colors.BRIGHT_WHITE) + c("│", Colors.CYAN))
         print(c("  ├" + "─" * 50 + "┤", Colors.CYAN))
-        print(c("  │  ", Colors.CYAN) + c("[1]", Colors.BRIGHT_CYAN) + c(" 🔐 Encrypt a File", Colors.WHITE) + " " * 22 + c("│", Colors.CYAN))
-        print(c("  │  ", Colors.CYAN) + c("[2]", Colors.BRIGHT_CYAN) + c(" 🔓 Decrypt a File", Colors.WHITE) + " " * 22 + c("│", Colors.CYAN))
-        print(c("  │  ", Colors.CYAN) + c("[3]", Colors.BRIGHT_CYAN) + c(" 📁 Batch Encrypt Multiple Files", Colors.WHITE) + " " * 7 + c("│", Colors.CYAN))
-        print(c("  │  ", Colors.CYAN) + c("[4]", Colors.BRIGHT_CYAN) + c(" ℹ  File Info & Verify", Colors.WHITE) + " " * 18 + c("│", Colors.CYAN))
-        print(c("  │  ", Colors.CYAN) + c("[5]", Colors.BRIGHT_CYAN) + c(" 🔄 Check for Updates", Colors.WHITE) + " " * 19 + c("│", Colors.CYAN))
+        print(c("  │  ", Colors.CYAN) + c("[1]", Colors.BRIGHT_CYAN) + c(" 🔐 Encrypt a File/Folder", Colors.WHITE) + " " * 15 + c("│", Colors.CYAN))
+        print(c("  │  ", Colors.CYAN) + c("[2]", Colors.BRIGHT_CYAN) + c(" 🔓 Decrypt a File/Folder", Colors.WHITE) + " " * 15 + c("│", Colors.CYAN))
+        print(c("  │  ", Colors.CYAN) + c("[3]", Colors.BRIGHT_CYAN) + c(" ℹ  File Info & Verify", Colors.WHITE) + " " * 18 + c("│", Colors.CYAN))
+        print(c("  │  ", Colors.CYAN) + c("[4]", Colors.BRIGHT_CYAN) + c(" 🔄 Check for Updates", Colors.WHITE) + " " * 19 + c("│", Colors.CYAN))
         print(c("  ├" + "─" * 50 + "┤", Colors.CYAN))
         print(c("  │  ", Colors.CYAN) + c("[0]", Colors.MUTED) + c(" Exit", Colors.MUTED) + " " * 35 + c("│", Colors.CYAN))
         print(c("  └" + "─" * 50 + "┘", Colors.CYAN))
@@ -2907,10 +2906,8 @@ def main():
         elif choice == '2':
             menu_decrypt()
         elif choice == '3':
-            menu_batch_encrypt()
-        elif choice == '4':
             menu_file_info()
-        elif choice == '5':
+        elif choice == '4':
             menu_update()
         elif choice == '0':
             clear()
