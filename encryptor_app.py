@@ -20,7 +20,7 @@ SECURITY FEATURES:
 # ============================================================================
 # VERSION AND UPDATE CONFIGURATION
 # ============================================================================
-APP_VERSION = "2.3.1"
+APP_VERSION = "2.3.2"
 GITHUB_REPO = "R-A-V-A-N-A/Quantum-File-Encryptor"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
